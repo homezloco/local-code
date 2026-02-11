@@ -134,6 +134,26 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    // Fetch available local models from agent-service (Ollama tags)
+    axios
+      .get('http://localhost:7788/models')
+      .then((resp) => {
+        const models = (resp.data?.models as string[] | undefined) || [];
+        if (models.length > 0) {
+          setToast({ text: `Found ${models.length} local models`, type: 'success' });
+          setCustomModels((prev) => {
+            const existing = new Set(prev.map((m) => m.name));
+            const additions = models
+              .filter((m) => !existing.has(m))
+              .map((m) => ({ name: m, provider: 'ollama', apiKey: '', endpoint: '' }));
+            return [...prev, ...additions];
+          });
+        }
+      })
+      .catch((err) => {
+        console.error('Model scan failed', err?.message || err);
+      });
+
     const saved = window.localStorage.getItem('dashboardPrefs');
     if (saved) {
       try {
