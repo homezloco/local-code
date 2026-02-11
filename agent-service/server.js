@@ -22,7 +22,7 @@ const OLLAMA_RETRIES = Number(process.env.OLLAMA_RETRIES || 0);
 
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 120000);
 
-const callOllama = async (model, prompt, fallbackModel = null) => {
+const callOllama = async (model, prompt, fallbackModel = null, providerPayload = {}) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
   let lastErr;
@@ -32,12 +32,18 @@ const callOllama = async (model, prompt, fallbackModel = null) => {
     for (const m of modelsToTry) {
       attempt += 1;
       try {
-        const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+        const url = providerPayload.endpoint || `${OLLAMA_URL}/api/generate`;
+        const headers = { 'Content-Type': 'application/json' };
+        if (providerPayload.apiKey) {
+          headers['Authorization'] = `Bearer ${providerPayload.apiKey}`;
+        }
+        const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ model: m, prompt, stream: false }),
           signal: controller.signal
         });
+
         if (!response.ok) {
           const text = await response.text();
           throw new Error(`Ollama error ${response.status} (${m}): ${text}`);
@@ -82,8 +88,13 @@ app.post('/plan', async (req, res) => {
       .join('\n\n');
     const fullPrompt = `${prompt}\n\nContext:\n${ctxText}`;
     const model = req.body.model || PLANNER_MODEL;
-    const plan = await callOllama(model, fullPrompt, FALLBACK_PLANNER_MODEL);
-    res.json({ plan, context: ragContext, modelTried: model, fallbackTried: FALLBACK_PLANNER_MODEL });
+    const providerPayload = {
+      provider: req.body.provider,
+      apiKey: req.body.apiKey,
+      endpoint: req.body.endpoint
+    };
+    const plan = await callOllama(model, fullPrompt, FALLBACK_PLANNER_MODEL, providerPayload);
+    res.json({ plan, context: ragContext, modelTried: model, fallbackTried: FALLBACK_PLANNER_MODEL, provider: providerPayload.provider });
   } catch (error) {
     console.error('Plan error:', error);
     res.status(502).json({ error: 'Failed to generate plan', detail: error?.message || String(error) });
@@ -112,8 +123,13 @@ app.post('/codegen', async (req, res) => {
       .join('\n\n');
     const fullPrompt = `Task:\n${prompt}\n\nContext:\n${ctxText}\n\nProduce code or a patch. If uncertain, explain next steps.`;
     const model = req.body.model || CODER_MODEL;
-    const code = await callOllama(model, fullPrompt, FALLBACK_CODER_MODEL);
-    res.json({ code, context: ragContext, modelTried: model, fallbackTried: FALLBACK_CODER_MODEL });
+    const providerPayload = {
+      provider: req.body.provider,
+      apiKey: req.body.apiKey,
+      endpoint: req.body.endpoint
+    };
+    const code = await callOllama(model, fullPrompt, FALLBACK_CODER_MODEL, providerPayload);
+    res.json({ code, context: ragContext, modelTried: model, fallbackTried: FALLBACK_CODER_MODEL, provider: providerPayload.provider });
   } catch (error) {
     console.error('Codegen error:', error);
     res.status(502).json({ error: 'Failed to generate code', detail: error?.message || String(error) });

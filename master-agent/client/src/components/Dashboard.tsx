@@ -52,6 +52,8 @@ const Dashboard: React.FC = () => {
   const [toast, setToast] = useState<{ text: string; type?: 'success' | 'error' } | null>(null);
   const [mainWidth, setMainWidth] = useState(60);
   const [resizing, setResizing] = useState(false);
+  const [customModels, setCustomModels] = useState<{ name: string; provider: string; apiKey?: string; endpoint?: string }[]>([]);
+  const [newModel, setNewModel] = useState({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
   const [widgetZones, setWidgetZones] = useState<{ header: string[]; main: string[]; secondary: string[]; footer: string[] }>(
     { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result'] }
   );
@@ -75,11 +77,11 @@ const Dashboard: React.FC = () => {
     secondary: useRef<HTMLDivElement | null>(null),
     footer: useRef<HTMLDivElement | null>(null)
   };
-  const navItems: { label: string; target: keyof typeof zoneRefs }[] = [
+  const navItems: { label: string; target: keyof typeof zoneRefs; widget?: string }[] = [
     { label: 'Dashboard', target: 'header' },
-    { label: 'Tasks', target: 'main' },
-    { label: 'Agents', target: 'secondary' },
-    { label: 'Plan/Codegen', target: 'footer' },
+    { label: 'Tasks', target: 'main', widget: 'tasks' },
+    { label: 'Agents', target: 'main', widget: 'agents' },
+    { label: 'Plan/Codegen', target: 'footer', widget: 'result' },
     { label: 'Settings', target: 'footer' }
   ];
 
@@ -113,10 +115,12 @@ const Dashboard: React.FC = () => {
       'llama3.1:8b-instruct',
       'gemma3:1b',
       'codellama:instruct',
+      'codellama:7b-instruct',
       'codellama:7b-instruct-q4_0',
       'openrouter/gpt-4o',
       plannerModel,
-      coderModel
+      coderModel,
+      ...customModels.map((m) => m.name)
     ])
   ).filter(Boolean);
 
@@ -132,6 +136,9 @@ const Dashboard: React.FC = () => {
           mainWidth?: number;
           widgetZones?: { header: string[]; main: string[]; secondary: string[]; footer: string[] };
           activeZone?: 'header' | 'main' | 'secondary' | 'footer';
+          customModels?: { name: string; provider: string; apiKey?: string; endpoint?: string }[];
+          taskSearch?: string;
+          agentSearch?: string;
         };
         if (parsed.plannerModel) setPlannerModel(parsed.plannerModel);
         if (parsed.coderModel) setCoderModel(parsed.coderModel);
@@ -139,6 +146,9 @@ const Dashboard: React.FC = () => {
         if (typeof parsed.mainWidth === 'number') setMainWidth(parsed.mainWidth);
         if (parsed.widgetZones) setWidgetZones(parsed.widgetZones);
         if (parsed.activeZone) setActiveZone(parsed.activeZone);
+        if (parsed.customModels) setCustomModels(parsed.customModels);
+        if (parsed.taskSearch) setTaskSearch(parsed.taskSearch);
+        if (parsed.agentSearch) setAgentSearch(parsed.agentSearch);
       } catch (e) {
         console.error('Failed to parse saved dashboard prefs', e);
       }
@@ -154,10 +164,13 @@ const Dashboard: React.FC = () => {
       ragK,
       mainWidth,
       widgetZones,
-      activeZone
+      activeZone,
+      customModels,
+      taskSearch,
+      agentSearch
     };
     window.localStorage.setItem('dashboardPrefs', JSON.stringify(payload));
-  }, [plannerModel, coderModel, ragK, mainWidth, widgetZones, activeZone]);
+  }, [plannerModel, coderModel, ragK, mainWidth, widgetZones, activeZone, customModels, taskSearch, agentSearch]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -202,7 +215,10 @@ const Dashboard: React.FC = () => {
       const resp = await axios.post('http://localhost:7788/plan', {
         prompt: `${task.title}\n${task.description || ''}`.trim(),
         context: { useRAG: true, k: ragK },
-        model: plannerModel
+        model: plannerModel,
+        provider: customModels.find((m) => m.name === plannerModel)?.provider,
+        apiKey: customModels.find((m) => m.name === plannerModel)?.apiKey,
+        endpoint: customModels.find((m) => m.name === plannerModel)?.endpoint
       });
       const body = resp.data.plan || JSON.stringify(resp.data);
       const meta: ResultMeta = {
@@ -234,7 +250,10 @@ const Dashboard: React.FC = () => {
       const resp = await axios.post('http://localhost:7788/codegen', {
         prompt: `${task.title}\n${task.description || ''}`.trim(),
         context: { useRAG: true, k: ragK },
-        model: coderModel
+        model: coderModel,
+        provider: customModels.find((m) => m.name === coderModel)?.provider,
+        apiKey: customModels.find((m) => m.name === coderModel)?.apiKey,
+        endpoint: customModels.find((m) => m.name === coderModel)?.endpoint
       });
       const body = resp.data.code || JSON.stringify(resp.data);
       const meta: ResultMeta = {
@@ -638,8 +657,12 @@ const Dashboard: React.FC = () => {
             <h3 className="text-lg font-semibold text-gray-900">Latest Plan/Codegen</h3>
             {lastResult ? (
               <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-64 overflow-auto text-sm whitespace-pre-wrap">
-                <div className="text-xs uppercase text-gray-500 mb-2">{lastResult.title}</div>
-                {lastResult.body}
+                <div className="text-xs uppercase text-gray-500 mb-2">
+                  {lastResult.title}
+                  {lastResult.meta?.model && <span className="ml-2 text-gray-600">({lastResult.meta.model})</span>}
+                  {lastResult.meta?.fallback && <span className="ml-1 text-gray-500">→ fallback: {lastResult.meta.fallback}</span>}
+                </div>
+                {renderMarkdown(lastResult.body)}
               </div>
             ) : (
               <div className="border border-dashed border-gray-300 rounded-lg p-4 text-center text-gray-500">
@@ -655,12 +678,28 @@ const Dashboard: React.FC = () => {
 
   const dropZoneClasses = 'min-h-[120px] border border-slate-800 rounded-xl p-4 bg-slate-900/50 backdrop-blur shadow-inner';
 
-  const scrollToZone = (target: keyof typeof zoneRefs) => {
+  const ensureWidgetInMain = (widget?: string) => {
+    if (!widget) return;
+    setWidgetZones((prev) => {
+      const next: typeof prev = { header: [], main: [], secondary: [], footer: [] };
+      (Object.keys(prev) as (keyof typeof prev)[]).forEach((zone) => {
+        next[zone] = prev[zone].filter((w) => w !== widget);
+      });
+      if (!next.main.includes(widget)) next.main = [...next.main, widget];
+      return next;
+    });
+  };
+
+  const scrollToZone = (target: keyof typeof zoneRefs, widget?: string) => {
+    ensureWidgetInMain(widget);
     const el = document.getElementById(target) || zoneRefs[target]?.current;
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
     setActiveZone(target);
+    if (typeof window !== 'undefined') {
+      window.location.hash = target;
+    }
   };
 
   const renderZone = (zone: keyof typeof widgetZones, title: string) => (
@@ -728,7 +767,7 @@ const Dashboard: React.FC = () => {
                     : 'text-slate-200 hover:bg-slate-800/80'
                 }`}
                 type="button"
-                onClick={() => scrollToZone(item.target)}
+                onClick={() => scrollToZone(item.target, item.widget)}
               >
                 {item.label}
               </button>
@@ -772,7 +811,6 @@ const Dashboard: React.FC = () => {
                   <select
                     className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                     onChange={(e) => applyPreset(e.target.value as keyof typeof layoutPresets)}
-                    defaultValue="balanced"
                   >
                     <option value="balanced">Balanced</option>
                     <option value="tasks-focused">Tasks Focused</option>
@@ -806,6 +844,52 @@ const Dashboard: React.FC = () => {
                     value={ragK}
                     onChange={(e) => setRagK(Number(e.target.value) || 1)}
                   />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-300">Add model</span>
+                  <input
+                    className="w-40 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    placeholder="model id"
+                    value={newModel.name}
+                    onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                  />
+                  <select
+                    className="w-32 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    value={newModel.provider}
+                    onChange={(e) => setNewModel({ ...newModel, provider: e.target.value })}
+                  >
+                    <option value="ollama">Ollama (local)</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Claude</option>
+                    <option value="xai">xAI</option>
+                    <option value="http">Custom HTTP</option>
+                  </select>
+                  <input
+                    className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    placeholder="API key (optional)"
+                    value={newModel.apiKey}
+                    onChange={(e) => setNewModel({ ...newModel, apiKey: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-md bg-slate-800 text-slate-100 border border-slate-700 hover:bg-slate-700"
+                    onClick={() => {
+                      if (!newModel.name.trim()) {
+                        setToast({ text: 'Model id required', type: 'error' });
+                        return;
+                      }
+                      const entry = { ...newModel };
+                      setCustomModels((prev) => {
+                        const filtered = prev.filter((m) => m.name !== entry.name.trim());
+                        return [...filtered, { ...entry, name: entry.name.trim() }];
+                      });
+                      setNewModel({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
+                      setToast({ text: 'Model saved locally', type: 'success' });
+                    }}
+                  >
+                    Save
+                  </button>
                 </div>
               </div>
             </div>
