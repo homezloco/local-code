@@ -7,8 +7,16 @@
     <meta name="theme-color" content="#000000" />
     <meta
       name="description"
-      content="Web site created using create-react-app"
+      content="Master Agent dashboard"
     />
+    <!-- Tailwind CDN for styling the dashboard; keeps CRA simple. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Fallback background if Tailwind fails to load */
+      body {
+        background: radial-gradient(circle at 20% 20%, #1f2937 0, #0f172a 45%, #0b1220 100%);
+      }
+    </style>
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <!--
       manifest.json provides metadata used when your web app is installed on a
