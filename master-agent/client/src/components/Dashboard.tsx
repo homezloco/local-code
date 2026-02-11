@@ -148,6 +148,16 @@ const Dashboard: React.FC = () => {
               .map((m) => ({ name: m, provider: 'ollama', apiKey: '', endpoint: '' }));
             return [...prev, ...additions];
           });
+
+          const findModel = (matchFn: (m: string) => boolean) => models.find(matchFn);
+          if (!plannerModel) {
+            const cl = findModel((m) => m.toLowerCase().startsWith('codellama')) || models[0];
+            if (cl) setPlannerModel(cl);
+          }
+          if (!coderModel) {
+            const cl = findModel((m) => m.toLowerCase().startsWith('codellama')) || models[0];
+            if (cl) setCoderModel(cl);
+          }
         }
       })
       .catch((err) => {

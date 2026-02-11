@@ -126,13 +126,12 @@
 ---
 
 ## Current Progress (Feb 11, 2026)
-- Frontend: tasks/agents CRUD, filters/search, modal forms, draggable widgets across header/main/secondary/footer, resizable columns, plan/codegen per task with RAG context, model dropdowns, toasts/confirmations.
-- Backend: master-agent API for tasks/agents; agent-service plan/codegen hitting Ollama with retries/fallbacks + RAG context; shared-rag search/reindex with Ollama embeddings fallback.
+- Frontend: tasks/agents CRUD, filters/search (persisted), modal forms, draggable widgets across header/main/secondary/footer, resizable columns, plan/codegen per task with RAG context, model dropdowns, custom provider/API key inputs, layout presets, skeletons/empty states, markdown results, uptime indicator, persisted prefs (layout/model/RAG/filters/search/widgets/nav).
+- Backend: master-agent API for tasks/agents; agent-service plan/codegen with Ollama + retries/fallbacks + RAG; provider overrides (OpenRouter/OpenAI/Claude/xAI/HTTP) with apiKey/endpoint; `/models` endpoint to list local Ollama tags; shared-rag search/reindex with Ollama embeddings fallback.
 - VSCode extension: plan/codegen commands call agent-service; settings include RAG/agent URLs and model defaults.
-- Repo: flattened master-agent/client into main repo; force-pushed to origin/main.
+- Repo: flattened master-agent/client into main repo; changes pushed to origin/main.
 
 ## Next Steps
-- Persist layout/model/RAG selections; add sidebar nav actions to routes.
-- Surface agent-service error detail and model tried in UI toasts/results; markdown render plan/codegen output.
-- Optional: layout presets + screenshots; loading skeletons/empty states refinement.
-- Resume Phase 5+ (CLI/Electron) after stability; add Zed extension parity.
+- Optional: move persisted prefs to backend profile; hash deep links to routes; richer provider-specific payloads beyond passthrough.
+- Add CLI/Electron + Zed parity after stability; Postgres plan for production.
+- Screenshot updates and docs refresh as UI evolves.

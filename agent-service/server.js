@@ -22,6 +22,32 @@ const OLLAMA_RETRIES = Number(process.env.OLLAMA_RETRIES || 0);
 
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 120000);
 
+const resolveProvider = (providerPayload) => {
+  const provider = (providerPayload?.provider || 'ollama').toLowerCase();
+  const apiKey = providerPayload?.apiKey;
+  const overrideEndpoint = providerPayload?.endpoint;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  switch (provider) {
+    case 'openrouter':
+      return { url: overrideEndpoint || 'https://openrouter.ai/api/v1/generate', headers };
+    case 'openai':
+      return { url: overrideEndpoint || 'https://api.openai.com/v1/completions', headers };
+    case 'anthropic':
+    case 'claude':
+      return { url: overrideEndpoint || 'https://api.anthropic.com/v1/messages', headers };
+    case 'xai':
+      return { url: overrideEndpoint || 'https://api.x.ai/v1/chat/completions', headers };
+    case 'http':
+      return { url: overrideEndpoint || `${OLLAMA_URL}/api/generate`, headers };
+    case 'ollama':
+    default:
+      return { url: overrideEndpoint || `${OLLAMA_URL}/api/generate`, headers };
+  }
+};
+
 const callOllama = async (model, prompt, fallbackModel = null, providerPayload = {}) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
@@ -32,11 +58,7 @@ const callOllama = async (model, prompt, fallbackModel = null, providerPayload =
     for (const m of modelsToTry) {
       attempt += 1;
       try {
-        const url = providerPayload.endpoint || `${OLLAMA_URL}/api/generate`;
-        const headers = { 'Content-Type': 'application/json' };
-        if (providerPayload.apiKey) {
-          headers['Authorization'] = `Bearer ${providerPayload.apiKey}`;
-        }
+        const { url, headers } = resolveProvider(providerPayload);
         const response = await fetch(url, {
           method: 'POST',
           headers,
