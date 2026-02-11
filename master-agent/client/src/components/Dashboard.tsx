@@ -54,6 +54,7 @@ const Dashboard: React.FC = () => {
   const [resizing, setResizing] = useState(false);
   const [customModels, setCustomModels] = useState<{ name: string; provider: string; apiKey?: string; endpoint?: string }[]>([]);
   const [newModel, setNewModel] = useState({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
+  const [uptimeMs, setUptimeMs] = useState(0);
   const [widgetZones, setWidgetZones] = useState<{ header: string[]; main: string[]; secondary: string[]; footer: string[] }>(
     { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result'] }
   );
@@ -123,6 +124,13 @@ const Dashboard: React.FC = () => {
       ...customModels.map((m) => m.name)
     ])
   ).filter(Boolean);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const started = Date.now();
+    const timer = window.setInterval(() => setUptimeMs(Date.now() - started), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -844,6 +852,7 @@ const Dashboard: React.FC = () => {
                     value={ragK}
                     onChange={(e) => setRagK(Number(e.target.value) || 1)}
                   />
+                  <span className="text-slate-400 text-xs">Uptime: {Math.floor(uptimeMs / 1000)}s</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-slate-300">Add model</span>
