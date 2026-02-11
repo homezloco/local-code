@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 interface Task {
@@ -66,6 +66,20 @@ const Dashboard: React.FC = () => {
     models: 'master-coordinator'
   });
   const [formError, setFormError] = useState('');
+  const [activeZone, setActiveZone] = useState<'header' | 'main' | 'secondary' | 'footer'>('header');
+  const zoneRefs: Record<'header' | 'main' | 'secondary' | 'footer', React.RefObject<HTMLDivElement | null>> = {
+    header: useRef<HTMLDivElement | null>(null),
+    main: useRef<HTMLDivElement | null>(null),
+    secondary: useRef<HTMLDivElement | null>(null),
+    footer: useRef<HTMLDivElement | null>(null)
+  };
+  const navItems: { label: string; target: keyof typeof zoneRefs }[] = [
+    { label: 'Dashboard', target: 'header' },
+    { label: 'Tasks', target: 'main' },
+    { label: 'Agents', target: 'secondary' },
+    { label: 'Plan/Codegen', target: 'footer' },
+    { label: 'Settings', target: 'footer' }
+  ];
 
   const modelOptions = Array.from(
     new Set([
@@ -84,6 +98,27 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchDashboardData();
+  }, []);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => (b.intersectionRatio || 0) - (a.intersectionRatio || 0));
+        if (visible[0]?.target?.id && ['header', 'main', 'secondary', 'footer'].includes(visible[0].target.id)) {
+          setActiveZone(visible[0].target.id as typeof activeZone);
+        }
+      },
+      { threshold: [0.2, 0.4, 0.6] }
+    );
+
+    (Object.keys(zoneRefs) as (keyof typeof zoneRefs)[]).forEach((key) => {
+      const el = zoneRefs[key].current;
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   const fetchDashboardData = async () => {
@@ -506,7 +541,15 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const dropZoneClasses = 'min-h-[80px] border border-dashed border-gray-300 rounded-lg p-3 bg-white/60';
+  const dropZoneClasses = 'min-h-[120px] border border-slate-800 rounded-xl p-4 bg-slate-900/50 backdrop-blur shadow-inner';
+
+  const scrollToZone = (target: keyof typeof zoneRefs) => {
+    const el = zoneRefs[target].current;
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setActiveZone(target);
+    }
+  };
 
   const renderZone = (zone: keyof typeof widgetZones, title: string) => (
     <div
@@ -564,13 +607,18 @@ const Dashboard: React.FC = () => {
             <div className="text-xs text-slate-400">Local dashboard</div>
           </div>
           <nav className="flex-1 px-4 py-4 space-y-2 text-sm">
-            {['Dashboard', 'Tasks', 'Agents', 'Plan/Codegen', 'Settings'].map((item) => (
-              <div
-                key={item}
-                className="px-3 py-2 rounded-md text-slate-200 hover:bg-slate-800/80 transition-colors cursor-default"
+            {navItems.map((item) => (
+              <button
+                key={item.label}
+                className={`w-full text-left px-3 py-2 rounded-md transition-colors ${
+                  activeZone === item.target
+                    ? 'bg-slate-800 text-white shadow-inner'
+                    : 'text-slate-200 hover:bg-slate-800/80'
+                }`}
+                onClick={() => scrollToZone(item.target)}
               >
-                {item}
-              </div>
+                {item.label}
+              </button>
             ))}
           </nav>
           <div className="px-4 py-4 text-xs text-slate-500 border-t border-slate-800">API: {new Date().toLocaleTimeString()}</div>
@@ -638,12 +686,16 @@ const Dashboard: React.FC = () => {
             </div>
           </header>
 
-          <div className="px-4 sm:px-6 lg:px-8 py-4 flex flex-col gap-4">
-            {renderZone('header', 'Header Zone')}
+          <div className="px-4 sm:px-6 lg:px-8 py-4 flex flex-col gap-6">
+            <section ref={zoneRefs.header} id="header" className="scroll-mt-20">
+              {renderZone('header', 'Header Zone')}
+            </section>
 
             <div className="flex items-stretch gap-3 relative">
-              <div
-                className="bg-slate-900/60 rounded-xl shadow-lg flex-1 p-4 border border-slate-800 backdrop-blur"
+              <section
+                ref={zoneRefs.main}
+                id="main"
+                className="bg-slate-900/60 rounded-xl shadow-lg flex-1 p-4 border border-slate-800 backdrop-blur scroll-mt-20"
                 style={{ width: `${mainWidth}%` }}
               >
                 <div className="flex items-center justify-between mb-3">
@@ -689,15 +741,17 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
                 {renderZone('main', 'Main Zone')}
-              </div>
+              </section>
 
               <div
                 className="w-2 cursor-col-resize bg-slate-800/70 rounded-lg"
                 onMouseDown={startResizing}
               />
 
-              <div
-                className="bg-slate-900/60 rounded-xl shadow-lg flex-1 p-4 border border-slate-800 backdrop-blur"
+              <section
+                ref={zoneRefs.secondary}
+                id="secondary"
+                className="bg-slate-900/60 rounded-xl shadow-lg flex-1 p-4 border border-slate-800 backdrop-blur scroll-mt-20"
                 style={{ width: `${100 - mainWidth}%` }}
               >
                 <div className="flex items-center justify-between mb-3">
@@ -713,10 +767,12 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
                 {renderZone('secondary', 'Secondary Zone')}
-              </div>
+              </section>
             </div>
 
-            {renderZone('footer', 'Footer Zone')}
+            <section ref={zoneRefs.footer} id="footer" className="scroll-mt-20">
+              {renderZone('footer', 'Footer Zone')}
+            </section>
           </div>
         </div>
       </div>
