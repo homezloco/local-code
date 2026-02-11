@@ -42,8 +42,10 @@ const Dashboard: React.FC = () => {
   const [taskPriorityFilter, setTaskPriorityFilter] = useState('all');
   const [taskSearch, setTaskSearch] = useState('');
   const [agentSearch, setAgentSearch] = useState('');
-  const [resultModal, setResultModal] = useState<{ title: string; body: string } | null>(null);
-  const [lastResult, setLastResult] = useState<{ title: string; body: string } | null>(null);
+  type ResultMeta = { model?: string; fallback?: string | null; error?: string; status?: number };
+  type ResultPayload = { title: string; body: string; meta?: ResultMeta };
+  const [resultModal, setResultModal] = useState<ResultPayload | null>(null);
+  const [lastResult, setLastResult] = useState<ResultPayload | null>(null);
   const [plannerModel, setPlannerModel] = useState('llama3.1:8b');
   const [coderModel, setCoderModel] = useState('qwen2.5-coder:14b');
   const [ragK, setRagK] = useState(8);
@@ -81,6 +83,28 @@ const Dashboard: React.FC = () => {
     { label: 'Settings', target: 'footer' }
   ];
 
+  const layoutPresets: Record<
+    'balanced' | 'tasks-focused' | 'agents-focused',
+    { mainWidth: number; widgetZones: { header: string[]; main: string[]; secondary: string[]; footer: string[] } }
+  > = {
+    balanced: { mainWidth: 60, widgetZones: { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result'] } },
+    'tasks-focused': {
+      mainWidth: 70,
+      widgetZones: { header: ['result'], main: ['tasks'], secondary: ['agents'], footer: [] }
+    },
+    'agents-focused': {
+      mainWidth: 55,
+      widgetZones: { header: [], main: ['agents'], secondary: ['tasks'], footer: ['result'] }
+    }
+  };
+
+  const applyPreset = (key: keyof typeof layoutPresets) => {
+    const preset = layoutPresets[key];
+    setMainWidth(preset.mainWidth);
+    setWidgetZones(preset.widgetZones);
+    setActiveZone('main');
+  };
+
   const modelOptions = Array.from(
     new Set([
       'qwen2.5-coder:14b',
@@ -97,8 +121,43 @@ const Dashboard: React.FC = () => {
   ).filter(Boolean);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem('dashboardPrefs');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as {
+          plannerModel?: string;
+          coderModel?: string;
+          ragK?: number;
+          mainWidth?: number;
+          widgetZones?: { header: string[]; main: string[]; secondary: string[]; footer: string[] };
+          activeZone?: 'header' | 'main' | 'secondary' | 'footer';
+        };
+        if (parsed.plannerModel) setPlannerModel(parsed.plannerModel);
+        if (parsed.coderModel) setCoderModel(parsed.coderModel);
+        if (typeof parsed.ragK === 'number') setRagK(parsed.ragK);
+        if (typeof parsed.mainWidth === 'number') setMainWidth(parsed.mainWidth);
+        if (parsed.widgetZones) setWidgetZones(parsed.widgetZones);
+        if (parsed.activeZone) setActiveZone(parsed.activeZone);
+      } catch (e) {
+        console.error('Failed to parse saved dashboard prefs', e);
+      }
+    }
     fetchDashboardData();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const payload = {
+      plannerModel,
+      coderModel,
+      ragK,
+      mainWidth,
+      widgetZones,
+      activeZone
+    };
+    window.localStorage.setItem('dashboardPrefs', JSON.stringify(payload));
+  }, [plannerModel, coderModel, ragK, mainWidth, widgetZones, activeZone]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -146,12 +205,24 @@ const Dashboard: React.FC = () => {
         model: plannerModel
       });
       const body = resp.data.plan || JSON.stringify(resp.data);
-      setResultModal({ title: 'Plan Result', body });
-      setLastResult({ title: 'Plan Result', body });
+      const meta: ResultMeta = {
+        model: resp.data.modelTried || plannerModel,
+        fallback: resp.data.fallbackTried ?? null
+      };
+      setResultModal({ title: 'Plan Result', body, meta });
+      setLastResult({ title: 'Plan Result', body, meta });
     } catch (err: any) {
-      const body = err?.message || 'Failed to plan';
-      setResultModal({ title: 'Plan Error', body });
-      setLastResult({ title: 'Plan Error', body });
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'Failed to plan';
+      const meta: ResultMeta = {
+        model: err?.response?.data?.modelTried || plannerModel,
+        fallback: err?.response?.data?.fallbackTried ?? null,
+        error: detail,
+        status
+      };
+      setResultModal({ title: 'Plan Error', body: detail, meta });
+      setLastResult({ title: 'Plan Error', body: detail, meta });
+      setToast({ text: `Plan failed (${meta.model || 'model'}): ${detail}`, type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -166,15 +237,35 @@ const Dashboard: React.FC = () => {
         model: coderModel
       });
       const body = resp.data.code || JSON.stringify(resp.data);
-      setResultModal({ title: 'Codegen Result', body });
-      setLastResult({ title: 'Codegen Result', body });
+      const meta: ResultMeta = {
+        model: resp.data.modelTried || coderModel,
+        fallback: resp.data.fallbackTried ?? null
+      };
+      setResultModal({ title: 'Codegen Result', body, meta });
+      setLastResult({ title: 'Codegen Result', body, meta });
     } catch (err: any) {
-      const body = err?.message || 'Failed to codegen';
-      setResultModal({ title: 'Codegen Error', body });
-      setLastResult({ title: 'Codegen Error', body });
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'Failed to codegen';
+      const meta: ResultMeta = {
+        model: err?.response?.data?.modelTried || coderModel,
+        fallback: err?.response?.data?.fallbackTried ?? null,
+        error: detail,
+        status
+      };
+      setResultModal({ title: 'Codegen Error', body: detail, meta });
+      setLastResult({ title: 'Codegen Error', body: detail, meta });
+      setToast({ text: `Codegen failed (${meta.model || 'model'}): ${detail}`, type: 'error' });
     } finally {
       setLoading(false);
     }
+  };
+
+  const renderMarkdown = (text: string) => {
+    // Minimal markdown handling: code fences and line breaks
+    const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const withCode = escaped.replace(/```([\s\S]*?)```/g, '<pre class="bg-slate-900/80 border border-slate-700 rounded-md p-3 overflow-auto text-sm"><code>$1</code></pre>');
+    const withBreaks = withCode.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>');
+    return <div className="prose prose-invert max-w-none text-slate-100" dangerouslySetInnerHTML={{ __html: withBreaks }} />;
   };
 
   const openTaskModalForEdit = (task: Task) => {
@@ -337,12 +428,33 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const Skeleton = ({ rows = 3 }: { rows?: number }) => (
+    <div className="space-y-3">
+      {Array.from({ length: rows }).map((_, idx) => (
+        <div key={idx} className="h-4 rounded bg-slate-800/70 animate-pulse" />
+      ))}
+    </div>
+  );
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-          <p className="mt-4 text-lg font-medium text-gray-700">Loading Dashboard...</p>
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex items-center justify-center">
+        <div className="space-y-4 w-full max-w-3xl px-6">
+          <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800 shadow-lg">
+            <div className="flex items-center justify-between mb-3">
+              <div className="h-6 w-32 bg-slate-800/80 rounded animate-pulse" />
+              <div className="h-6 w-24 bg-slate-800/80 rounded animate-pulse" />
+            </div>
+            <Skeleton rows={4} />
+          </div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800 shadow-lg">
+              <Skeleton rows={5} />
+            </div>
+            <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800 shadow-lg">
+              <Skeleton rows={5} />
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -412,8 +524,8 @@ const Dashboard: React.FC = () => {
         return (
           <div className="space-y-4">
             {filteredTasks.length === 0 && (
-              <div className="border border-dashed border-gray-300 rounded-lg p-4 text-center text-gray-500">
-                No tasks found for these filters.
+              <div className="border border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-400 bg-slate-900/40">
+                No tasks for these filters. Try clearing search/filters or adding a new task.
               </div>
             )}
             {filteredTasks.map((task: Task) => (
@@ -474,8 +586,8 @@ const Dashboard: React.FC = () => {
         return (
           <div className="space-y-4">
             {filteredAgents.length === 0 && (
-              <div className="border border-dashed border-gray-300 rounded-lg p-4 text-center text-gray-500">
-                No agents found for this search.
+              <div className="border border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-400 bg-slate-900/40">
+                No agents for this search. Clear search or register a new agent.
               </div>
             )}
             {filteredAgents.map((agent: Agent) => (
@@ -544,11 +656,11 @@ const Dashboard: React.FC = () => {
   const dropZoneClasses = 'min-h-[120px] border border-slate-800 rounded-xl p-4 bg-slate-900/50 backdrop-blur shadow-inner';
 
   const scrollToZone = (target: keyof typeof zoneRefs) => {
-    const el = zoneRefs[target].current;
+    const el = document.getElementById(target) || zoneRefs[target]?.current;
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setActiveZone(target);
     }
+    setActiveZone(target);
   };
 
   const renderZone = (zone: keyof typeof widgetZones, title: string) => (
@@ -615,6 +727,7 @@ const Dashboard: React.FC = () => {
                     ? 'bg-slate-800 text-white shadow-inner'
                     : 'text-slate-200 hover:bg-slate-800/80'
                 }`}
+                type="button"
                 onClick={() => scrollToZone(item.target)}
               >
                 {item.label}
@@ -654,6 +767,18 @@ const Dashboard: React.FC = () => {
               </div>
               <div className="flex-1" />
               <div className="flex items-center gap-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-300">Layout</span>
+                  <select
+                    className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    onChange={(e) => applyPreset(e.target.value as keyof typeof layoutPresets)}
+                    defaultValue="balanced"
+                  >
+                    <option value="balanced">Balanced</option>
+                    <option value="tasks-focused">Tasks Focused</option>
+                    <option value="agents-focused">Agents Focused</option>
+                  </select>
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="text-slate-300">Planner</span>
                   <input
@@ -950,10 +1075,16 @@ const Dashboard: React.FC = () => {
                 ✕
               </button>
             </div>
-            <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-96 overflow-auto">
-              <pre className="whitespace-pre-wrap text-sm">
-{resultModal.body}
-              </pre>
+            {resultModal.meta && (
+              <div className="text-xs text-gray-600 mb-3 space-y-1">
+                <div>Model: {resultModal.meta.model || 'n/a'}</div>
+                {resultModal.meta.fallback && <div>Fallback: {resultModal.meta.fallback}</div>}
+                {resultModal.meta.status && <div>Status: {resultModal.meta.status}</div>}
+                {resultModal.meta.error && <div className="text-red-600">Error: {resultModal.meta.error}</div>}
+              </div>
+            )}
+            <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-96 overflow-auto text-sm text-gray-900">
+              {renderMarkdown(resultModal.body)}
             </div>
             <div className="flex justify-end mt-4">
               <button

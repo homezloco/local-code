@@ -126,13 +126,13 @@
 ---
 
 ## Current Progress (Feb 11, 2026)
-- Frontend: tasks/agents CRUD, filters/search, modal forms, plan/codegen per task with RAG context; result modal.
-- Backend: master-agent API for tasks/agents; agent-service plan/codegen endpoints; shared-rag search/reindex.
-- VSCode extension: wired to agent-service for plan/codegen.
-- Ollama: tarball install in progress; pulling qwen2.5-coder:14b.
+- Frontend: tasks/agents CRUD, filters/search, modal forms, draggable widgets across header/main/secondary/footer, resizable columns, plan/codegen per task with RAG context, model dropdowns, toasts/confirmations.
+- Backend: master-agent API for tasks/agents; agent-service plan/codegen hitting Ollama with retries/fallbacks + RAG context; shared-rag search/reindex with Ollama embeddings fallback.
+- VSCode extension: plan/codegen commands call agent-service; settings include RAG/agent URLs and model defaults.
+- Repo: flattened master-agent/client into main repo; force-pushed to origin/main.
 
 ## Next Steps
-- Finish Ollama pull and swap agent-service placeholders for real model calls.
-- Add UI feedback (toasts/confirmations) and empty states.
-- Optional: richer plan/codegen formatting, adjustable RAG k/model selection.
-- Resume Phase 5+ (CLI/Electron) after model integration is verified.
+- Persist layout/model/RAG selections; add sidebar nav actions to routes.
+- Surface agent-service error detail and model tried in UI toasts/results; markdown render plan/codegen output.
+- Optional: layout presets + screenshots; loading skeletons/empty states refinement.
+- Resume Phase 5+ (CLI/Electron) after stability; add Zed extension parity.
