@@ -66,6 +66,26 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// Models list endpoint (Ollama tags)
+app.get('/models', async (req, res) => {
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/tags`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(502).json({ error: 'Failed to list models', detail: text });
+    }
+    const data = await response.json();
+    const models = (data?.models || []).map((m) => m?.name).filter(Boolean);
+    res.json({ models });
+  } catch (error) {
+    console.error('List models error:', error);
+    res.status(502).json({ error: 'Failed to list models', detail: error?.message || String(error) });
+  }
+});
+
 // Plan endpoint
 app.post('/plan', async (req, res) => {
   try {
