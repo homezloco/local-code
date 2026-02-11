@@ -1,0 +1,14 @@
+{
+  "name": "agent-service",
+  "version": "0.0.1",
+  "description": "Standalone agent service (planner/coder) stub",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "node-fetch": "^3.3.2"
+  }
+}

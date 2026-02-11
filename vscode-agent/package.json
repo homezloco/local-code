@@ -1,0 +1,66 @@
+{ "name": "vscode-agent", "displayName": "Local Agentic Assistant", "version": "0.0.1",
+  "engines": { "vscode": "^1.84.0" },
+  "description": "Planner/coder/summarizer with local+cloud models and RAG hooks.",
+  "main": "./dist/extension.js",
+"activationEvents": [
+    "onCommand:agent.planAnswer",
+    "onCommand:agent.codegen",
+    "onCommand:agent.summarize",
+    "onCommand:agent.refreshIndex",
+    "onCommand:agent.selectModel"
+  ],
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "echo 'add eslint if needed'"
+  },
+  "categories": ["Other"],
+  "contributes": {
+    "commands": [
+      { "command": "agent.planAnswer", "title": "Agent: Plan & Ask" },
+      { "command": "agent.codegen", "title": "Agent: Codegen with RAG" },
+      { "command": "agent.summarize", "title": "Agent: Summarize Selection" },
+      { "command": "agent.refreshIndex", "title": "Agent: Refresh RAG Index" },
+      { "command": "agent.selectModel", "title": "Agent: Select Model" }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Agent Settings",
+      "properties": {
+        "agent.models": {
+          "type": "array", "description": "Model registry entries",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "provider": { "type": "string", "enum": ["ollama","openai","anthropic","http"] },
+              "modelId": { "type": "string" },
+              "quant": { "type": "string" },
+              "endpoint": { "type": "string" },
+              "apiKeySetting": { "type": "string" },
+              "roles": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["name","provider","modelId"]
+          },
+          "default": []
+        },
+        "agent.defaultPlanner": { "type": "string", "default": "llama3.1:8b" },
+        "agent.defaultCoder": { "type": "string", "default": "qwen2.5-coder:14b" },
+        "agent.defaultSummarizer": { "type": "string", "default": "llama3.1:8b" },
+        "agent.ragServiceUrl": { "type": "string", "default": "http://127.0.0.1:7777" },
+        "agent.retrieveK": { "type": "number", "default": 8 },
+        "agent.maxChunkTokens": { "type": "number", "default": 1500 }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.84.0",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}
