@@ -1,68 +1,46 @@
-# Local Agentic Workspace
+# Getting Started with Create React App
 
-This workspace hosts:
-- `master-agent/`: Web dashboard (tasks/agents CRUD, filters/search, draggable widgets, adjustable main/secondary columns, plan/codegen with RAG, model/RAG controls, presets, persistence).
-- `agent-service/`: Planner/coder endpoints hitting Ollama (with retries/fallbacks/RAG) and supporting custom provider/apiKey/endpoint overrides.
-- `shared-rag/`: Retrieval service using Ollama embeddings (with keyword fallback).
-- `vscode-agent/`: VSCode extension wired to agent-service and shared-rag.
-- `zed-agent/`: Zed extension scaffold.
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-All code is local-first; do not commit secrets (`.env`, credentials, binaries). Default dev DB: SQLite. Postgres is planned for production.
+## Available Scripts
 
-## Models (local + API)
-- Local (Ollama): set `PLANNER_MODEL`, `CODER_MODEL`, `FALLBACK_*` envs; dashboard model dropdowns support installed/local IDs (including codellama variants) and custom entries.
-- API providers: add a custom model with provider (OpenRouter/OpenAI/Claude/xAI/HTTP) and optional API key/endpoint; the dashboard sends provider/apiKey/endpoint in the plan/codegen payload. API keys are stored only in the browser (localStorage).
-- RAG k and model choices are persisted in localStorage along with layout and filters/search.
+In the project directory, you can run:
 
-## Current State (Feb 11, 2026)
-- Services: shared-rag (7777), agent-service (7788), master-agent API (3001), dashboard (3002 dev).
-- Dashboard: CRUD, filters/search, modals/toasts/confirmations, draggable widgets (Tasks, Agents, Plan/Codegen), resizable columns, layout presets, loading skeletons, markdown result rendering, model/provider controls, persisted preferences.
-- Agent-service: real `/plan` and `/codegen` with Ollama + RAG + retries/fallbacks; accepts provider/apiKey/endpoint overrides.
-- VSCode extension: commands call agent-service/shared-rag; settings include URLs and model defaults.
+### `npm start`
 
-## Run services (dev)
-- Shared RAG (7777):
-  ```bash
-  cd shared-rag
-  chmod +x start.sh
-  ./start.sh
-  ```
-- Agent service (7788):
-  ```bash
-  cd agent-service
-  chmod +x start.sh
-  ./start.sh
-  ```
-- Master-agent API/UI (3001/3002):
-  ```bash
-  cd master-agent
-  npm run start        # API on 3001 (SQLite dev DB)
-  cd client
-  npm start            # React dev server on 3002
-  ```
+Runs the app in the development mode.\
+Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
 
-Quick links:
-- Dashboard: http://localhost:3002
-- API health: http://localhost:3001/health
-- Agent-service plan: POST http://localhost:7788/plan
-- Agent-service codegen: POST http://localhost:7788/codegen
+The page will reload if you make edits.\
+You will also see any lint errors in the console.
 
-## Service Endpoints
-- `shared-rag`: `/reindex`, `/search`
-- `agent-service`: `/plan`, `/codegen` (model/provider overrides, RAG context)
+### `npm test`
 
-## Windows vs WSL
-- WSL path: `/mnt/d/WindsurfProjects/localcode/...`
-- Windows path: `D:\WindsurfProjects\localcode\...`
-- Run Bash start scripts from WSL; PowerShell needs wrappers if desired.
+Launches the test runner in the interactive watch mode.\
+See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
 
-## VSCode extension settings (user settings)
-```json
-{
-  "agent.ragServiceUrl": "http://127.0.0.1:7777",
-  "agent.agentServiceUrl": "http://127.0.0.1:7788",
-  "agent.defaultPlanner": "llama3.1:8b",
-  "agent.defaultCoder": "qwen2.5-coder:14b",
-  "agent.defaultSummarizer": "llama3.1:8b"
-}
-```
+### `npm run build`
+
+Builds the app for production to the `build` folder.\
+It correctly bundles React in production mode and optimizes the build for the best performance.
+
+The build is minified and the filenames include the hashes.\
+Your app is ready to be deployed!
+
+See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+
+### `npm run eject`
+
+**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+
+If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+
+Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+
+You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+
+## Learn More
+
+You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+
+To learn React, check out the [React documentation](https://reactjs.org/).
