@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('../config/logger');
+const BasePlugin = require('./BasePlugin');
 
 class PluginManager {
   constructor() {
@@ -14,17 +15,22 @@ class PluginManager {
         fs.mkdirSync(this.pluginDir, { recursive: true });
       }
 
-      const pluginFiles = fs.readdirSync(this.pluginDir).filter(file => 
-        file.endsWith('.js') || file.endsWith('.ts')
-      );
+      const pluginFiles = fs
+        .readdirSync(this.pluginDir)
+        .filter((file) => file.endsWith('.js') || file.endsWith('.ts'))
+        // Skip helper/abstract files
+        .filter((file) => !['BasePlugin.js', 'PluginManager.js'].includes(file));
 
       for (const file of pluginFiles) {
         try {
           const pluginPath = path.join(this.pluginDir, file);
           const pluginModule = require(pluginPath);
-          const plugin = pluginModule[Object.keys(pluginModule)[0]];
+          const exportKey = Object.keys(pluginModule)[0];
+          const candidate = pluginModule[exportKey];
+          const plugin = typeof candidate === 'function' ? new candidate() : candidate;
 
-          if (plugin && plugin.name && plugin.version && plugin.initialize) {
+          const isValidInstance = plugin instanceof BasePlugin;
+          if (isValidInstance && plugin.name && plugin.version && typeof plugin.initialize === 'function') {
             await this.registerPlugin(plugin);
             logger.info(`Loaded plugin: ${plugin.name} v${plugin.version}`);
           } else {
@@ -70,8 +76,14 @@ class PluginManager {
     const pluginPath = path.join(this.pluginDir, `${name}.js`);
     if (fs.existsSync(pluginPath)) {
       const pluginModule = require(pluginPath);
-      const plugin = pluginModule[Object.keys(pluginModule)[0]];
-      await this.registerPlugin(plugin);
+      const exportKey = Object.keys(pluginModule)[0];
+      const candidate = pluginModule[exportKey];
+      const plugin = typeof candidate === 'function' ? new candidate() : candidate;
+      if (plugin instanceof BasePlugin) {
+        await this.registerPlugin(plugin);
+      } else {
+        logger.warn(`Cannot reload plugin ${name}: invalid structure`);
+      }
     }
   }
 }

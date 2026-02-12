@@ -47,11 +47,16 @@ const Dashboard: React.FC = () => {
   const [plannerModel, setPlannerModel] = useState('llama3.1:8b');
   const [coderModel, setCoderModel] = useState('qwen2.5-coder:14b');
   const [ragK, setRagK] = useState(8);
+  const [customModels, setCustomModels] = useState<
+    { name: string; provider: string; apiKey?: string; endpoint?: string }[]
+  >([]);
+  const [newModel, setNewModel] = useState({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
+
   const [toast, setToast] = useState<{ text: string; type?: 'success' | 'error' } | null>(null);
   const [mainWidth, setMainWidth] = useState(60);
   const [resizing, setResizing] = useState(false);
   const [widgetZones, setWidgetZones] = useState<{ header: string[]; main: string[]; secondary: string[]; footer: string[] }>(
-    { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result'] }
+    { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result', 'settings'] }
   );
   const [taskForm, setTaskForm] = useState({
     title: '',
@@ -82,19 +87,41 @@ const Dashboard: React.FC = () => {
   ];
 
   const modelOptions = Array.from(
-    new Set([
-      'qwen2.5-coder:14b',
-      'qwen2.5-coder:7b',
-      'llama3.1:8b',
-      'llama3.1:8b-instruct',
-      'gemma3:1b',
-      'codellama:instruct',
-      'codellama:7b-instruct-q4_0',
-      'openrouter/gpt-4o',
-      plannerModel,
-      coderModel
-    ])
-  ).filter(Boolean);
+    new Set(
+      [
+        'qwen2.5-coder:14b',
+        'qwen2.5-coder:7b',
+        'llama3.1:8b',
+        'llama3.1:8b-instruct',
+        'gemma3:1b',
+        'codellama:instruct',
+        'codellama:7b-instruct',
+        'codellama:7b-instruct-q4_0',
+        'openrouter/gpt-4o',
+        plannerModel,
+        coderModel,
+        ...customModels.map((m) => (typeof m === 'string' ? m : m?.name || ''))
+      ]
+        .map((opt) => (typeof opt === 'string' ? opt.trim() : ''))
+        .filter((opt) => opt.length > 0)
+    )
+  );
+
+  const handleAddModel = (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = newModel.name.trim();
+    if (!name) {
+      setToast({ text: 'Model id is required', type: 'error' });
+      return;
+    }
+    setCustomModels((prev) => {
+      const exists = prev.some((m) => m.name === name);
+      if (exists) return prev;
+      return [...prev, { name, provider: newModel.provider, apiKey: newModel.apiKey.trim(), endpoint: newModel.endpoint.trim() }];
+    });
+    setNewModel({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
+    setToast({ text: 'Model saved', type: 'success' });
+  };
 
   useEffect(() => {
     fetchDashboardData();
@@ -536,6 +563,86 @@ const Dashboard: React.FC = () => {
             )}
           </div>
         );
+      case 'settings':
+        return (
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900">Settings</h3>
+            <form className="space-y-3" onSubmit={handleAddModel}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Model id</label>
+                  <input
+                    className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    placeholder="e.g. llama3.1:8b"
+                    value={newModel.name}
+                    onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Provider</label>
+                  <select
+                    className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    value={newModel.provider}
+                    onChange={(e) => setNewModel({ ...newModel, provider: e.target.value })}
+                  >
+                    <option value="ollama">Ollama (local)</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="xai">xAI</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">API key (optional)</label>
+                  <input
+                    className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    value={newModel.apiKey}
+                    onChange={(e) => setNewModel({ ...newModel, apiKey: e.target.value })}
+                    placeholder="sk-..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Endpoint (optional)</label>
+                  <input
+                    className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    value={newModel.endpoint}
+                    onChange={(e) => setNewModel({ ...newModel, endpoint: e.target.value })}
+                    placeholder="http://localhost:11434"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Save model
+                </button>
+              </div>
+            </form>
+            {customModels.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-gray-800">Saved models</h4>
+                <ul className="space-y-1 text-sm text-gray-700">
+                  {customModels.map((m) => (
+                    <li key={m.name} className="flex items-center justify-between rounded border border-gray-200 px-3 py-2">
+                      <div className="flex flex-col">
+                        <span className="font-medium text-gray-900">{m.name}</span>
+                        <span className="text-gray-500 text-xs">{m.provider}</span>
+                      </div>
+                      {(m.apiKey || m.endpoint) && (
+                        <span className="text-gray-500 text-xs">{m.endpoint || 'API key set'}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
       default:
         return null;
     }
@@ -550,35 +657,6 @@ const Dashboard: React.FC = () => {
       setActiveZone(target);
     }
   };
-
-  const renderZone = (zone: keyof typeof widgetZones, title: string) => (
-    <div
-      className={dropZoneClasses}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => handleDrop(e, zone)}
-    >
-      <div className="flex items-center justify-between mb-2 text-sm font-semibold text-gray-700">
-        <span>{title}</span>
-        <span className="text-gray-400">Drop widgets here</span>
-      </div>
-      <div className="space-y-3">
-        {widgetZones[zone].map((w) => (
-          <div
-            key={`${zone}-${w}`}
-            className="border border-gray-200 rounded-md bg-white shadow-sm"
-            draggable
-            onDragStart={(e) => handleDragStart(e, w)}
-          >
-            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50 cursor-move">
-              <span className="text-sm font-medium text-gray-800 capitalize">{w}</span>
-              <span className="text-gray-400 text-xs">⇅</span>
-            </div>
-            <div className="p-3">{renderWidget(w)}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 
   const startResizing = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -597,7 +675,7 @@ const Dashboard: React.FC = () => {
   return (
     <>
       <div
-        className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex"
+        className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex overflow-x-hidden"
         onMouseMove={handleMouseMove}
         onMouseUp={stopResizing}
       >
@@ -626,8 +704,8 @@ const Dashboard: React.FC = () => {
 
         <div className="flex-1 flex flex-col">
           <datalist id="modelOptionsList">
-            {modelOptions.map((opt) => (
-              <option key={opt} value={opt} />
+            {modelOptions.map((opt, idx) => (
+              <option key={`${opt}-${idx}`} value={opt} />
             ))}
           </datalist>
           <header className="bg-slate-900/70 border-b border-slate-800 shadow-lg backdrop-blur">

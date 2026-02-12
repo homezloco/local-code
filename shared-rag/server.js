@@ -12,10 +12,33 @@ const includeGlobs = (process.env.RAG_INCLUDE || 'src/**,app/**,pages/**,compone
 const excludeGlobs = (process.env.RAG_EXCLUDE || 'node_modules/**,.git/**,.next/**,.nuxt/**,dist/**,build/**,coverage/**').split(',');
 const chunkSize = Number(process.env.CHUNK_SIZE || 1200);
 const maxFileSize = Number(process.env.MAX_FILE_SIZE || 500_000);
-const ollamaUrl = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
-const embedModel = process.env.EMBED_MODEL || 'nomic-embed-text';
+
+const requiredEnv = ['OLLAMA_URL', 'EMBED_MODEL'];
+const missingEnv = requiredEnv.filter((k) => !process.env[k]);
+if (missingEnv.length) {
+  console.error(`Missing required env vars: ${missingEnv.join(', ')}`);
+  process.exit(1);
+}
+
+const ollamaUrl = process.env.OLLAMA_URL;
+const embedModel = process.env.EMBED_MODEL;
 
 let index = []; // { path, snippet, offset, embedding?: number[] }
+
+function ensureString(value, name) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${name} is required`);
+  }
+  return value.trim();
+}
+
+function chunkText(text) {
+  const chunks = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    chunks.push({ snippet: text.slice(i, i + chunkSize), offset: i });
+  }
+  return chunks;
+}
 
 async function embedText(text) {
   try {
@@ -82,7 +105,7 @@ function cosine(a, b) {
 }
 
 app.post('/search', async (req, res) => {
-  const { query, k = 8 } = req.body ?? {};
+  const { query, k = 8, useWebFallback = true } = req.body ?? {};
   if (!query || typeof query !== 'string') {
     return res.status(400).json({ error: 'query is required' });
   }
@@ -109,12 +132,119 @@ app.post('/search', async (req, res) => {
     .sort((a, b) => b._score - a._score)
     .slice(0, k)
     .map(({ _score, ...rest }) => rest);
-  res.json({ results: scored });
+
+  // Optional web search fallback
+  if (scored.length === 0 && useWebFallback) {
+    try {
+      const webResp = await fetch('https://duckduckgo.com/?q=' + encodeURIComponent(query) + '&format=json', {
+        method: 'GET',
+        headers: { 'User-Agent': 'local-agentic-workspace' }
+      });
+      if (webResp.ok) {
+        const data = await webResp.json();
+        const abstracts = (data?.RelatedTopics || [])
+          .map((t) => t.Text)
+          .filter(Boolean)
+          .slice(0, k)
+          .map((text, idx) => ({ path: `web:${idx}`, snippet: text, offset: 0 }));
+        return res.json({ results: abstracts, source: 'web_fallback' });
+      }
+    } catch (err) {
+      console.warn('web search fallback failed', err?.message || err);
+    }
+  }
+
+  res.json({ results: scored, source: 'local' });
 });
 
 app.post('/reindex', async (_req, res) => {
   const count = await reindex();
   res.json({ indexed: count });
+});
+
+// Ingest raw text
+app.post('/ingest/text', async (req, res) => {
+  try {
+    const text = ensureString(req.body?.text, 'text');
+    const source = req.body?.source || 'text';
+    const chunks = chunkText(text);
+    for (const c of chunks) {
+      const embedding = await embedText(c.snippet);
+      index.push({ path: `text:${source}`, snippet: c.snippet, offset: c.offset, embedding });
+    }
+    res.json({ indexed: chunks.length });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'ingest failed' });
+  }
+});
+
+// Ingest by URL (fetch content as text)
+app.post('/ingest/url', async (req, res) => {
+  try {
+    const url = ensureString(req.body?.url, 'url');
+    const response = await fetch(url, { headers: { 'User-Agent': 'local-agentic-workspace' } });
+    if (!response.ok) {
+      return res.status(502).json({ error: `Fetch failed ${response.status}` });
+    }
+    const text = await response.text();
+    const chunks = chunkText(text);
+    for (const c of chunks) {
+      const embedding = await embedText(c.snippet);
+      index.push({ path: `url:${url}`, snippet: c.snippet, offset: c.offset, embedding });
+    }
+    res.json({ indexed: chunks.length });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'ingest failed' });
+  }
+});
+
+// Ingest file content (path relative to workspaceRoot)
+app.post('/ingest/file', async (req, res) => {
+  try {
+    const relPath = ensureString(req.body?.path, 'path');
+    const absPath = path.resolve(workspaceRoot, relPath);
+    const stat = await fs.stat(absPath);
+    if (stat.size > maxFileSize) {
+      return res.status(400).json({ error: 'file too large' });
+    }
+    const content = await fs.readFile(absPath, 'utf8');
+    const chunks = chunkText(content);
+    for (const c of chunks) {
+      const embedding = await embedText(c.snippet);
+      index.push({ path: absPath, snippet: c.snippet, offset: c.offset, embedding });
+    }
+    res.json({ indexed: chunks.length, path: absPath });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'ingest failed' });
+  }
+});
+
+app.get('/health', async (_req, res) => {
+  const envStatus = {
+    OLLAMA_URL: ollamaUrl,
+    EMBED_MODEL: embedModel,
+  };
+  const response = {
+    status: missingEnv.length ? 'degraded' : 'ok',
+    missingEnv,
+    indexSize: index.length,
+    workspaceRoot,
+    includeGlobs,
+    excludeGlobs,
+  };
+
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 5000);
+    const ollamaResp = await fetch(`${ollamaUrl}/api/tags`, { signal: controller.signal });
+    clearTimeout(t);
+    response.ollama = { status: ollamaResp.ok ? 'ok' : `status ${ollamaResp.status}` };
+  } catch (err) {
+    response.ollama = { status: 'error', detail: err?.message || String(err) };
+    response.status = 'degraded';
+  }
+
+  res.status(response.status === 'ok' ? 200 : 503).json({ ...response, env: envStatus });
 });
 
 const port = process.env.PORT || 7777;

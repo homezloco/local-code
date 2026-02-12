@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
+import { startDelegationStream, DelegationEvent } from '../services/delegationClient';
+import DelegationTimeline, { DelegationEntry } from './DelegationTimeline';
+import { fetchTemplates, createTemplate, deleteTemplate, TemplateDto } from '../services/templatesClient';
+import ChatPanel from './ChatPanel';
+import TaskModal from './TaskModal';
+import AgentModal from './AgentModal';
+
 interface Task {
   id: string;
   title: string;
@@ -29,11 +36,60 @@ interface Agent {
   updatedAt: string;
 }
 
+interface Suggestion {
+  id: string;
+  title: string;
+  body: string;
+  agentName: string;
+  confidence?: number | null;
+  score?: number | null;
+  status: 'new' | 'merged' | 'approved' | 'rejected' | 'auto_answered' | 'auto_delegated' | 'needs_review';
+  createdAt: string;
+  updatedAt: string;
+  metadata?: any;
+}
+
+interface ClusterSuggestion {
+  id: string;
+  title: string;
+  body: string;
+  agentName: string;
+  confidence?: number;
+  score?: number;
+  status: string;
+  createdAt: string;
+  metadata?: any;
+}
+
+interface Cluster {
+  id: string;
+  summary: string;
+  score: number;
+  agents: string[];
+  tags: string[];
+  topRepresentative?: ClusterSuggestion;
+  suggestions: ClusterSuggestion[];
+}
+
+interface MasterProfile {
+  id: string;
+  name: string;
+  displayName: string;
+  persona?: string;
+  traits?: Record<string, any>;
+  variables?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const Dashboard: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState('');
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -46,697 +102,386 @@ const Dashboard: React.FC = () => {
   type ResultPayload = { title: string; body: string; meta?: ResultMeta };
   const [resultModal, setResultModal] = useState<ResultPayload | null>(null);
   const [lastResult, setLastResult] = useState<ResultPayload | null>(null);
-  const [plannerModel, setPlannerModel] = useState('llama3.1:8b');
-  const [coderModel, setCoderModel] = useState('qwen2.5-coder:14b');
+  const [clusters, setClusters] = useState<Cluster[]>([]);
+  const [plannerModel, setPlannerModel] = useState('');
+  const [coderModel, setCoderModel] = useState('');
   const [ragK, setRagK] = useState(8);
   const [toast, setToast] = useState<{ text: string; type?: 'success' | 'error' } | null>(null);
   const [mainWidth, setMainWidth] = useState(60);
   const [resizing, setResizing] = useState(false);
   const [customModels, setCustomModels] = useState<{ name: string; provider: string; apiKey?: string; endpoint?: string }[]>([]);
   const [newModel, setNewModel] = useState({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
+  const [clusterMinScore, setClusterMinScore] = useState<number>(0);
+  const [clusterAgentFilter, setClusterAgentFilter] = useState('');
   const [uptimeMs, setUptimeMs] = useState(0);
-  const [widgetZones, setWidgetZones] = useState<{ header: string[]; main: string[]; secondary: string[]; footer: string[] }>(
-    { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result'] }
-  );
-  const [taskForm, setTaskForm] = useState({
-    title: '',
-    description: '',
-    priority: 'medium'
+  const [delegationLogs, setDelegationLogs] = useState<Record<string, { ts: number; event: DelegationEvent; data: any }[]>>({});
+  const [delegationRunning, setDelegationRunning] = useState<Record<string, boolean>>({});
+  const [delegationCancels, setDelegationCancels] = useState<Record<string, () => void>>({});
+
+  const [profileForm, setProfileForm] = useState({
+    name: 'master-agent',
+    displayName: 'Master Agent',
+    persona: 'Orchestrator focused on clarity, brevity, and actionable steps.',
+    traitTone: 'concise',
+    traitRisk: 'cautious',
+    traitDomain: 'general',
+    defaultPlannerModel: 'codellama:7b-instruct-q4_0',
+    fallbackPlannerModel: 'gemma3:1b',
+    defaultCoderModel: 'qwen2.5-coder:14b',
+    fallbackCoderModel: 'codellama:instruct',
+    ragEnabled: true,
+    ragKDefault: 6,
+    plannerTimeoutMs: 480000,
+    retries: 0,
+    delegateIntervalMs: 60000,
+    autoDelegateEnabled: true,
+    loggingLevel: 'info'
   });
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
+
   const [agentForm, setAgentForm] = useState({
     name: '',
     displayName: '',
     description: '',
     capabilities: 'task-management,agent-delegation',
-    models: 'master-coordinator'
+    models: 'master-coordinator',
+    preferredModel: ''
   });
+
   const [formError, setFormError] = useState('');
-  const [activeZone, setActiveZone] = useState<'header' | 'main' | 'secondary' | 'footer'>('header');
+  const [activeZone, setActiveZone] = useState<'header' | 'main' | 'secondary' | 'footer'>('main');
+  const [templates, setTemplates] = useState<TemplateDto[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateInputs, setTemplateInputs] = useState<Record<string, string>>({});
+  const [templateForm, setTemplateForm] = useState({
+    title: '',
+    description: '',
+    category: 'custom',
+    agents: 'email-agent',
+    inputs: '',
+    steps: ''
+  });
+
+  const handleTemplateSelect = (template: TemplateDto) => {
+    setSelectedTemplateId(template.id);
+    const initialInputs: Record<string, string> = {};
+    (template.inputs || []).forEach((key) => {
+      initialInputs[key] = templateInputs[key] || '';
+    });
+    setTemplateInputs(initialInputs);
+  };
+
+  const handleTemplateInputChange = (key: string, value: string) => {
+    setTemplateInputs((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleTemplateSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setFormError('');
+    const title = templateForm.title.trim();
+    const description = templateForm.description.trim();
+    if (!title || !description) {
+      setFormError('Template title and description are required');
+      return;
+    }
+
+    const inputs = templateForm.inputs
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const agentsList = templateForm.agents
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const steps = templateForm.steps
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    try {
+      await createTemplate({
+        title,
+        description,
+        category: templateForm.category,
+        agents: agentsList,
+        inputs,
+        steps
+      });
+      setToast({ text: 'Template saved', type: 'success' });
+      setTemplateForm({ title: '', description: '', category: 'custom', agents: 'email-agent', inputs: '', steps: '' });
+      await fetchTemplatesList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save template';
+      setFormError(msg);
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const handleTemplateDelete = async (id: string) => {
+    if (!window.confirm('Delete this template?')) return;
+    try {
+      await deleteTemplate(id);
+      setToast({ text: 'Template deleted', type: 'success' });
+      if (selectedTemplateId === id) {
+        setSelectedTemplateId('');
+        setTemplateInputs({});
+      }
+      await fetchTemplatesList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete template';
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const [widgetZones, setWidgetZones] = useState<{ header: string[]; main: string[]; secondary: string[]; footer: string[] }>(
+    { header: [], main: ['tasks', 'templates', 'suggestions'], secondary: ['agents'], footer: ['chat', 'result', 'delegation', 'settings'] }
+  );
+
+  const dragWidgetRef = useRef<string | null>(null);
+
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, widget: string) => {
+    dragWidgetRef.current = widget;
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>, zone: keyof typeof widgetZones) => {
+    e.preventDefault();
+    const widget = dragWidgetRef.current;
+    if (!widget) return;
+    setWidgetZones((prev) => {
+      // Remove from all zones first
+      const next = Object.fromEntries(
+        Object.entries(prev).map(([key, list]) => [key, list.filter((w) => w !== widget)])
+      ) as typeof prev;
+      if (!next[zone].includes(widget)) {
+        next[zone] = [...next[zone], widget];
+      }
+      return next;
+    });
+    dragWidgetRef.current = null;
+  };
+
+  const startResizing = () => setResizing(true);
+  const stopResizing = () => setResizing(false);
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!resizing) return;
+    const pct = Math.min(80, Math.max(20, (e.clientX / window.innerWidth) * 100));
+    setMainWidth(pct);
+  };
+
+  const renderWidget = (w: string) => {
+    switch (w) {
+      case 'chat':
+        return (
+          <ChatPanel
+            tasks={tasks.map((t) => ({ id: t.id, title: t.title, description: t.description }))}
+            agents={agents.map((a) => ({ name: a.name, displayName: a.displayName }))}
+            defaultPlannerModel={profileForm.defaultPlannerModel}
+            defaultCoderModel={profileForm.defaultCoderModel}
+            defaultRagEnabled={profileForm.ragEnabled}
+            defaultRagK={profileForm.ragKDefault}
+          />
+        );
+      case 'result':
+        return lastResult ? (
+          <div className="space-y-2">
+            <h3 className="text-lg font-semibold text-slate-100">Latest Plan/Codegen</h3>
+            <div className="rounded border border-slate-800 bg-slate-950/70 shadow-sm p-3 max-h-64 overflow-auto text-sm whitespace-pre-wrap text-slate-100">
+              <div className="text-xs uppercase text-slate-400 mb-2">{lastResult.title}</div>
+              {lastResult.body}
+            </div>
+          </div>
+        ) : (
+          <div className="border border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-400 bg-slate-900/40">
+            Run Plan or Codegen to see results here.
+          </div>
+        );
+      default:
+        return <div className="text-slate-400 text-sm">Widget coming soon.</div>;
+    }
+  };
+
+  const modelOptions: string[] = Array.from(
+    new Set([
+      plannerModel,
+      coderModel,
+      profileForm.defaultPlannerModel,
+      profileForm.defaultCoderModel,
+      ...customModels.map((m) => m.name)
+    ].filter(Boolean))
+  );
+
+  const handleTaskSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    try {
+      await axios.post('http://localhost:3001/tasks', {
+        title: taskForm.title.trim(),
+        description: taskForm.description.trim(),
+        priority: taskForm.priority
+      });
+      setToast({ text: 'Task saved', type: 'success' });
+      setShowTaskModal(false);
+      setEditingTaskId(null);
+      setTaskForm({ title: '', description: '', priority: 'medium' });
+      // reload tasks
+      const res = await axios.get('http://localhost:3001/tasks');
+      setTasks(res.data || []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save task';
+      setFormError(msg);
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const handleAgentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    try {
+      await axios.post('http://localhost:3001/agents/register', {
+        name: agentForm.name.trim(),
+        displayName: agentForm.displayName.trim(),
+        description: agentForm.description.trim(),
+        capabilities: agentForm.capabilities.split(',').map((s) => s.trim()).filter(Boolean),
+        models: agentForm.models.split(',').map((s) => s.trim()).filter(Boolean)
+      });
+      setToast({ text: 'Agent saved', type: 'success' });
+      setShowAgentModal(false);
+      setEditingAgentId(null);
+      setAgentForm({ name: '', displayName: '', description: '', capabilities: 'task-management,agent-delegation', models: 'master-coordinator', preferredModel: '' });
+      const res = await axios.get('http://localhost:3001/agents');
+      setAgents(res.data || []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save agent';
+      setFormError(msg);
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const [taskForm, setTaskForm] = useState({
+    title: '',
+    description: '',
+    priority: 'medium'
+  });
+
   const zoneRefs: Record<'header' | 'main' | 'secondary' | 'footer', React.RefObject<HTMLDivElement | null>> = {
     header: useRef<HTMLDivElement | null>(null),
     main: useRef<HTMLDivElement | null>(null),
     secondary: useRef<HTMLDivElement | null>(null),
     footer: useRef<HTMLDivElement | null>(null)
   };
+
+  const fetchTemplatesList = async () => {
+    try {
+      const list = await fetchTemplates();
+      setTemplates(list);
+    } catch (err) {
+      console.error('Failed to fetch templates', err);
+    }
+  };
+
+  const loadProfile = async () => {
+    try {
+      setProfileLoading(true);
+      setProfileError('');
+      const res = await axios.get('http://localhost:3001/profile');
+      const p: MasterProfile = res.data;
+      setProfileForm({
+        name: p.name || 'master-agent',
+        displayName: p.displayName || 'Master Agent',
+        persona: p.persona || '',
+        traitTone: (p.traits || {}).tone || 'concise',
+        traitRisk: (p.traits || {}).risk || 'cautious',
+        traitDomain: (p.traits || {}).domain || 'general',
+        defaultPlannerModel: (p.variables || {}).defaultPlannerModel || 'codellama:7b-instruct-q4_0',
+        fallbackPlannerModel: (p.variables || {}).fallbackPlannerModel || 'gemma3:1b',
+        defaultCoderModel: (p.variables || {}).defaultCoderModel || 'qwen2.5-coder:14b',
+        fallbackCoderModel: (p.variables || {}).fallbackCoderModel || 'codellama:instruct',
+        ragEnabled: (p.variables || {}).ragEnabled ?? true,
+        ragKDefault: (p.variables || {}).ragKDefault ?? 6,
+        plannerTimeoutMs: (p.variables || {}).plannerTimeoutMs ?? 480000,
+        retries: (p.variables || {}).retries ?? 0,
+        delegateIntervalMs: (p.variables || {}).delegateIntervalMs ?? 60000,
+        autoDelegateEnabled: (p.variables || {}).autoDelegateEnabled ?? true,
+        loggingLevel: (p.variables || {}).loggingLevel || 'info'
+      });
+      // hydrate UI defaults
+      setPlannerModel((p.variables || {}).defaultPlannerModel || '');
+      setCoderModel((p.variables || {}).defaultCoderModel || '');
+      setRagK((p.variables || {}).ragKDefault ?? 8);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load profile';
+      setProfileError(msg);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    try {
+      setProfileLoading(true);
+      setProfileError('');
+      await axios.put('http://localhost:3001/profile', {
+        name: profileForm.name.trim(),
+        displayName: profileForm.displayName.trim(),
+        persona: profileForm.persona.trim(),
+        traits: { tone: profileForm.traitTone, risk: profileForm.traitRisk, domain: profileForm.traitDomain },
+        variables: {
+          defaultPlannerModel: profileForm.defaultPlannerModel,
+          fallbackPlannerModel: profileForm.fallbackPlannerModel,
+          defaultCoderModel: profileForm.defaultCoderModel,
+          fallbackCoderModel: profileForm.fallbackCoderModel,
+          ragEnabled: profileForm.ragEnabled,
+          ragKDefault: profileForm.ragKDefault,
+          plannerTimeoutMs: profileForm.plannerTimeoutMs,
+          retries: profileForm.retries,
+          delegateIntervalMs: profileForm.delegateIntervalMs,
+          autoDelegateEnabled: profileForm.autoDelegateEnabled,
+          loggingLevel: profileForm.loggingLevel
+        }
+      });
+      setToast({ text: 'Profile saved', type: 'success' });
+      setPlannerModel(profileForm.defaultPlannerModel);
+      setCoderModel(profileForm.defaultCoderModel);
+      setRagK(profileForm.ragKDefault);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save profile';
+      setProfileError(msg);
+      setToast({ text: msg, type: 'error' });
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProfile();
+  }, []);
+
   const navItems: { label: string; target: keyof typeof zoneRefs; widget?: string }[] = [
     { label: 'Dashboard', target: 'header' },
     { label: 'Tasks', target: 'main', widget: 'tasks' },
+    { label: 'Suggestions', target: 'main', widget: 'suggestions' },
     { label: 'Agents', target: 'main', widget: 'agents' },
+    { label: 'Templates', target: 'main', widget: 'templates' },
+    { label: 'Chat', target: 'footer', widget: 'chat' },
     { label: 'Plan/Codegen', target: 'footer', widget: 'result' },
-    { label: 'Settings', target: 'footer' }
+    { label: 'Settings', target: 'footer', widget: 'settings' }
   ];
-
-  const layoutPresets: Record<
-    'balanced' | 'tasks-focused' | 'agents-focused',
-    { mainWidth: number; widgetZones: { header: string[]; main: string[]; secondary: string[]; footer: string[] } }
-  > = {
-    balanced: { mainWidth: 60, widgetZones: { header: [], main: ['tasks'], secondary: ['agents'], footer: ['result'] } },
-    'tasks-focused': {
-      mainWidth: 70,
-      widgetZones: { header: ['result'], main: ['tasks'], secondary: ['agents'], footer: [] }
-    },
-    'agents-focused': {
-      mainWidth: 55,
-      widgetZones: { header: [], main: ['agents'], secondary: ['tasks'], footer: ['result'] }
-    }
-  };
-
-  const applyPreset = (key: keyof typeof layoutPresets) => {
-    const preset = layoutPresets[key];
-    setMainWidth(preset.mainWidth);
-    setWidgetZones(preset.widgetZones);
-    setActiveZone('main');
-  };
-
-  const modelOptions = Array.from(
-    new Set([
-      'qwen2.5-coder:14b',
-      'qwen2.5-coder:7b',
-      'llama3.1:8b',
-      'llama3.1:8b-instruct',
-      'gemma3:1b',
-      'codellama:instruct',
-      'codellama:7b-instruct',
-      'codellama:7b-instruct-q4_0',
-      'openrouter/gpt-4o',
-      plannerModel,
-      coderModel,
-      ...customModels.map((m) => m.name)
-    ])
-  ).filter(Boolean);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const started = Date.now();
-    const timer = window.setInterval(() => setUptimeMs(Date.now() - started), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    // Fetch available local models from agent-service (Ollama tags)
-    axios
-      .get('http://localhost:7788/models')
-      .then((resp) => {
-        const models = (resp.data?.models as string[] | undefined) || [];
-        if (models.length > 0) {
-          setToast({ text: `Found ${models.length} local models`, type: 'success' });
-          setCustomModels((prev) => {
-            const existing = new Set(prev.map((m) => m.name));
-            const additions = models
-              .filter((m) => !existing.has(m))
-              .map((m) => ({ name: m, provider: 'ollama', apiKey: '', endpoint: '' }));
-            return [...prev, ...additions];
-          });
-
-          const findModel = (matchFn: (m: string) => boolean) => models.find(matchFn);
-          if (!plannerModel) {
-            const cl = findModel((m) => m.toLowerCase().startsWith('codellama')) || models[0];
-            if (cl) setPlannerModel(cl);
-          }
-          if (!coderModel) {
-            const cl = findModel((m) => m.toLowerCase().startsWith('codellama')) || models[0];
-            if (cl) setCoderModel(cl);
-          }
-        }
-      })
-      .catch((err) => {
-        console.error('Model scan failed', err?.message || err);
-      });
-
-    const saved = window.localStorage.getItem('dashboardPrefs');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as {
-          plannerModel?: string;
-          coderModel?: string;
-          ragK?: number;
-          mainWidth?: number;
-          widgetZones?: { header: string[]; main: string[]; secondary: string[]; footer: string[] };
-          activeZone?: 'header' | 'main' | 'secondary' | 'footer';
-          customModels?: { name: string; provider: string; apiKey?: string; endpoint?: string }[];
-          taskSearch?: string;
-          agentSearch?: string;
-        };
-        if (parsed.plannerModel) setPlannerModel(parsed.plannerModel);
-        if (parsed.coderModel) setCoderModel(parsed.coderModel);
-        if (typeof parsed.ragK === 'number') setRagK(parsed.ragK);
-        if (typeof parsed.mainWidth === 'number') setMainWidth(parsed.mainWidth);
-        if (parsed.widgetZones) setWidgetZones(parsed.widgetZones);
-        if (parsed.activeZone) setActiveZone(parsed.activeZone);
-        if (parsed.customModels) setCustomModels(parsed.customModels);
-        if (parsed.taskSearch) setTaskSearch(parsed.taskSearch);
-        if (parsed.agentSearch) setAgentSearch(parsed.agentSearch);
-      } catch (e) {
-        console.error('Failed to parse saved dashboard prefs', e);
-      }
-    }
-    fetchDashboardData();
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const payload = {
-      plannerModel,
-      coderModel,
-      ragK,
-      mainWidth,
-      widgetZones,
-      activeZone,
-      customModels,
-      taskSearch,
-      agentSearch
-    };
-    window.localStorage.setItem('dashboardPrefs', JSON.stringify(payload));
-  }, [plannerModel, coderModel, ragK, mainWidth, widgetZones, activeZone, customModels, taskSearch, agentSearch]);
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => (b.intersectionRatio || 0) - (a.intersectionRatio || 0));
-        if (visible[0]?.target?.id && ['header', 'main', 'secondary', 'footer'].includes(visible[0].target.id)) {
-          setActiveZone(visible[0].target.id as typeof activeZone);
-        }
-      },
-      { threshold: [0.2, 0.4, 0.6] }
-    );
-
-    (Object.keys(zoneRefs) as (keyof typeof zoneRefs)[]).forEach((key) => {
-      const el = zoneRefs[key].current;
-      if (el) observer.observe(el);
-    });
-
-    return () => observer.disconnect();
-  }, []);
-
-  const fetchDashboardData = async () => {
-    try {
-      const [tasksResponse, agentsResponse] = await Promise.all([
-        axios.get('http://localhost:3001/tasks'),
-        axios.get('http://localhost:3001/agents')
-      ]);
-
-      setTasks(tasksResponse.data);
-      setAgents(agentsResponse.data);
-      setLoading(false);
-    } catch (err) {
-      setError('Failed to fetch dashboard data');
-      setLoading(false);
-    }
-  };
-
-  const runPlan = async (task: Task) => {
-    try {
-      setLoading(true);
-      const resp = await axios.post('http://localhost:7788/plan', {
-        prompt: `${task.title}\n${task.description || ''}`.trim(),
-        context: { useRAG: true, k: ragK },
-        model: plannerModel,
-        provider: customModels.find((m) => m.name === plannerModel)?.provider,
-        apiKey: customModels.find((m) => m.name === plannerModel)?.apiKey,
-        endpoint: customModels.find((m) => m.name === plannerModel)?.endpoint
-      });
-      const body = resp.data.plan || JSON.stringify(resp.data);
-      const meta: ResultMeta = {
-        model: resp.data.modelTried || plannerModel,
-        fallback: resp.data.fallbackTried ?? null
-      };
-      setResultModal({ title: 'Plan Result', body, meta });
-      setLastResult({ title: 'Plan Result', body, meta });
-    } catch (err: any) {
-      const status = err?.response?.status;
-      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'Failed to plan';
-      const meta: ResultMeta = {
-        model: err?.response?.data?.modelTried || plannerModel,
-        fallback: err?.response?.data?.fallbackTried ?? null,
-        error: detail,
-        status
-      };
-      setResultModal({ title: 'Plan Error', body: detail, meta });
-      setLastResult({ title: 'Plan Error', body: detail, meta });
-      setToast({ text: `Plan failed (${meta.model || 'model'}): ${detail}`, type: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const runCodegen = async (task: Task) => {
-    try {
-      setLoading(true);
-      const resp = await axios.post('http://localhost:7788/codegen', {
-        prompt: `${task.title}\n${task.description || ''}`.trim(),
-        context: { useRAG: true, k: ragK },
-        model: coderModel,
-        provider: customModels.find((m) => m.name === coderModel)?.provider,
-        apiKey: customModels.find((m) => m.name === coderModel)?.apiKey,
-        endpoint: customModels.find((m) => m.name === coderModel)?.endpoint
-      });
-      const body = resp.data.code || JSON.stringify(resp.data);
-      const meta: ResultMeta = {
-        model: resp.data.modelTried || coderModel,
-        fallback: resp.data.fallbackTried ?? null
-      };
-      setResultModal({ title: 'Codegen Result', body, meta });
-      setLastResult({ title: 'Codegen Result', body, meta });
-    } catch (err: any) {
-      const status = err?.response?.status;
-      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'Failed to codegen';
-      const meta: ResultMeta = {
-        model: err?.response?.data?.modelTried || coderModel,
-        fallback: err?.response?.data?.fallbackTried ?? null,
-        error: detail,
-        status
-      };
-      setResultModal({ title: 'Codegen Error', body: detail, meta });
-      setLastResult({ title: 'Codegen Error', body: detail, meta });
-      setToast({ text: `Codegen failed (${meta.model || 'model'}): ${detail}`, type: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const renderMarkdown = (text: string) => {
-    // Minimal markdown handling: code fences and line breaks
-    const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const withCode = escaped.replace(/```([\s\S]*?)```/g, '<pre class="bg-slate-900/80 border border-slate-700 rounded-md p-3 overflow-auto text-sm"><code>$1</code></pre>');
-    const withBreaks = withCode.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>');
-    return <div className="prose prose-invert max-w-none text-slate-100" dangerouslySetInnerHTML={{ __html: withBreaks }} />;
-  };
-
-  const openTaskModalForEdit = (task: Task) => {
-    setTaskForm({
-      title: task.title,
-      description: task.description || '',
-      priority: task.priority
-    });
-    setEditingTaskId(task.id);
-    setFormError('');
-    setShowTaskModal(true);
-  };
-
-  const openAgentModalForEdit = (agent: Agent) => {
-    setAgentForm({
-      name: agent.name,
-      displayName: agent.displayName,
-      description: agent.description || '',
-      capabilities: (agent.capabilities || []).join(', '),
-      models: (agent.models || []).join(', ')
-    });
-    setEditingAgentId(agent.id);
-    setFormError('');
-    setShowAgentModal(true);
-  };
-
-  const deleteTask = async (id: string) => {
-    if (!window.confirm('Delete this task?')) return;
-    try {
-      setLoading(true);
-      await axios.delete(`http://localhost:3001/tasks/${id}`);
-      setToast({ text: 'Task deleted', type: 'success' });
-      await fetchDashboardData();
-    } catch (err) {
-      setError('Failed to delete task');
-      setLoading(false);
-    }
-  };
-
-  const deleteAgent = async (id: string) => {
-    if (!window.confirm('Delete this agent?')) return;
-    try {
-      setLoading(true);
-      await axios.delete(`http://localhost:3001/agents/${id}`);
-      setToast({ text: 'Agent deleted', type: 'success' });
-      await fetchDashboardData();
-    } catch (err) {
-      setError('Failed to delete agent');
-      setLoading(false);
-    }
-  };
-
-  const handleTaskSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setFormError('');
-    if (!taskForm.title.trim()) {
-      setFormError('Title is required');
-      return;
-    }
-    const allowedPriorities = ['low', 'medium', 'high', 'urgent'];
-    const priority = allowedPriorities.includes(taskForm.priority) ? taskForm.priority : 'medium';
-    try {
-      setLoading(true);
-      if (editingTaskId) {
-        await axios.put(`http://localhost:3001/tasks/${editingTaskId}`, {
-          title: taskForm.title.trim(),
-          description: taskForm.description.trim(),
-          priority
-        });
-        setToast({ text: 'Task updated', type: 'success' });
-      } else {
-        await axios.post('http://localhost:3001/tasks', {
-          title: taskForm.title.trim(),
-          description: taskForm.description.trim(),
-          priority
-        });
-        setToast({ text: 'Task created', type: 'success' });
-      }
-      setShowTaskModal(false);
-      setEditingTaskId(null);
-      setTaskForm({ title: '', description: '', priority: 'medium' });
-      await fetchDashboardData();
-    } catch (err) {
-      setFormError('Failed to create task');
-      setLoading(false);
-    }
-  };
-
-  const handleAgentSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setFormError('');
-    if (!agentForm.name.trim() || !agentForm.displayName.trim()) {
-      setFormError('Name and display name are required');
-      return;
-    }
-    try {
-      setLoading(true);
-      await axios.post('http://localhost:3001/agents/register', {
-        name: agentForm.name.trim(),
-        displayName: agentForm.displayName.trim(),
-        description: agentForm.description.trim(),
-        capabilities: agentForm.capabilities
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        models: agentForm.models
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        endpoints: {
-          register: '/agents/register',
-          delegate: '/tasks/delegate',
-          status: '/agents/status'
-        }
-      });
-      setToast({ text: editingAgentId ? 'Agent updated' : 'Agent registered', type: 'success' });
-      setShowAgentModal(false);
-      setEditingAgentId(null);
-      setAgentForm({
-        name: '',
-        displayName: '',
-        description: '',
-        capabilities: 'task-management,agent-delegation',
-        models: 'master-coordinator'
-      });
-      await fetchDashboardData();
-    } catch (err) {
-      setFormError('Failed to register agent');
-      setLoading(false);
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending':
-        return 'bg-yellow-200 text-yellow-800';
-      case 'in_progress':
-        return 'bg-blue-200 text-blue-800';
-      case 'completed':
-        return 'bg-green-200 text-green-800';
-      case 'failed':
-        return 'bg-red-200 text-red-800';
-      default:
-        return 'bg-gray-200 text-gray-800';
-    }
-  };
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'low':
-        return 'bg-gray-200 text-gray-800';
-      case 'medium':
-        return 'bg-blue-200 text-blue-800';
-      case 'high':
-        return 'bg-orange-200 text-orange-800';
-      case 'urgent':
-        return 'bg-red-200 text-red-800';
-      default:
-        return 'bg-gray-200 text-gray-800';
-    }
-  };
-
-  const Skeleton = ({ rows = 3 }: { rows?: number }) => (
-    <div className="space-y-3">
-      {Array.from({ length: rows }).map((_, idx) => (
-        <div key={idx} className="h-4 rounded bg-slate-800/70 animate-pulse" />
-      ))}
-    </div>
-  );
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex items-center justify-center">
-        <div className="space-y-4 w-full max-w-3xl px-6">
-          <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800 shadow-lg">
-            <div className="flex items-center justify-between mb-3">
-              <div className="h-6 w-32 bg-slate-800/80 rounded animate-pulse" />
-              <div className="h-6 w-24 bg-slate-800/80 rounded animate-pulse" />
-            </div>
-            <Skeleton rows={4} />
-          </div>
-          <div className="grid md:grid-cols-2 gap-3">
-            <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800 shadow-lg">
-              <Skeleton rows={5} />
-            </div>
-            <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800 shadow-lg">
-              <Skeleton rows={5} />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-red-600 font-medium">Error: {error}</p>
-        </div>
-      </div>
-    );
-  }
-
-  const filteredTasks = tasks.filter((task) => {
-    const matchesStatus = taskStatusFilter === 'all' || task.status === taskStatusFilter;
-    const matchesPriority = taskPriorityFilter === 'all' || task.priority === taskPriorityFilter;
-    const q = taskSearch.trim().toLowerCase();
-    const matchesSearch =
-      q.length === 0 ||
-      task.title.toLowerCase().includes(q) ||
-      (task.description || '').toLowerCase().includes(q);
-    return matchesStatus && matchesPriority && matchesSearch;
-  });
-
-  const filteredAgents = agents.filter((agent) => {
-    const q = agentSearch.trim().toLowerCase();
-    if (q.length === 0) return true;
-    return (
-      agent.displayName.toLowerCase().includes(q) ||
-      agent.name.toLowerCase().includes(q) ||
-      (agent.description || '').toLowerCase().includes(q)
-    );
-  });
-
-  const moveWidget = (widget: string, targetZone: keyof typeof widgetZones) => {
-    setWidgetZones((prev) => {
-      const next: typeof prev = {
-        header: [],
-        main: [],
-        secondary: [],
-        footer: []
-      };
-      (Object.keys(prev) as (keyof typeof prev)[]).forEach((zone) => {
-        next[zone] = prev[zone].filter((w) => w !== widget);
-      });
-      next[targetZone] = [...next[targetZone], widget];
-      return next;
-    });
-  };
-
-  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, widget: string) => {
-    e.dataTransfer.setData('widget', widget);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>, zone: keyof typeof widgetZones) => {
-    e.preventDefault();
-    const widget = e.dataTransfer.getData('widget');
-    if (widget) moveWidget(widget, zone);
-  };
-
-  const renderWidget = (widget: string) => {
-    switch (widget) {
-      case 'tasks':
-        return (
-          <div className="space-y-4">
-            {filteredTasks.length === 0 && (
-              <div className="border border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-400 bg-slate-900/40">
-                No tasks for these filters. Try clearing search/filters or adding a new task.
-              </div>
-            )}
-            {filteredTasks.map((task: Task) => (
-              <div
-                key={task.id}
-                className="border-l-4 border-gray-200 pl-4 py-3 hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <h3 className="font-medium text-gray-900">{task.title}</h3>
-                    <p className="text-sm text-gray-600 mt-1">{task.description}</p>
-                    <div className="flex items-center mt-2 space-x-2">
-                      <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(task.status)}`}>
-                        {task.status}
-                      </span>
-                      <span className={`px-2 py-1 rounded-full text-xs ${getPriorityColor(task.priority)}`}>
-                        {task.priority}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right space-y-2">
-                    <p className="text-sm text-gray-500">
-                      {new Date(task.createdAt).toLocaleDateString()}
-                    </p>
-                    <div className="flex space-x-2 justify-end">
-                      <button
-                        className="text-blue-600 hover:text-blue-800 text-sm"
-                        onClick={() => openTaskModalForEdit(task)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="text-red-600 hover:text-red-800 text-sm"
-                        onClick={() => deleteTask(task.id)}
-                      >
-                        Delete
-                      </button>
-                      <button
-                        className="text-indigo-600 hover:text-indigo-800 text-sm"
-                        onClick={() => runPlan(task)}
-                      >
-                        Plan
-                      </button>
-                      <button
-                        className="text-amber-600 hover:text-amber-800 text-sm"
-                        onClick={() => runCodegen(task)}
-                      >
-                        Codegen
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        );
-      case 'agents':
-        return (
-          <div className="space-y-4">
-            {filteredAgents.length === 0 && (
-              <div className="border border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-400 bg-slate-900/40">
-                No agents for this search. Clear search or register a new agent.
-              </div>
-            )}
-            {filteredAgents.map((agent: Agent) => (
-              <div
-                key={agent.id}
-                className="border-l-4 border-gray-200 pl-4 py-3 hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <h3 className="font-medium text-gray-900">{agent.displayName}</h3>
-                    <p className="text-sm text-gray-600">{agent.description}</p>
-                    <div className="flex items-center mt-2 space-x-2">
-                      <span className="px-2 py-1 rounded-full text-xs bg-blue-200 text-blue-800">
-                        {agent.status}
-                      </span>
-                      <span className="px-2 py-1 rounded-full text-xs bg-gray-200 text-gray-800">
-                        {agent.models.length} models
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right space-y-2">
-                    <p className="text-sm text-gray-500">
-                      {new Date(agent.createdAt).toLocaleDateString()}
-                    </p>
-                    <div className="flex space-x-2 justify-end">
-                      <button
-                        className="text-blue-600 hover:text-blue-800 text-sm"
-                        onClick={() => openAgentModalForEdit(agent)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="text-red-600 hover:text-red-800 text-sm"
-                        onClick={() => deleteAgent(agent.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        );
-      case 'result':
-        return (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-gray-900">Latest Plan/Codegen</h3>
-            {lastResult ? (
-              <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-64 overflow-auto text-sm whitespace-pre-wrap">
-                <div className="text-xs uppercase text-gray-500 mb-2">
-                  {lastResult.title}
-                  {lastResult.meta?.model && <span className="ml-2 text-gray-600">({lastResult.meta.model})</span>}
-                  {lastResult.meta?.fallback && <span className="ml-1 text-gray-500">→ fallback: {lastResult.meta.fallback}</span>}
-                </div>
-                {renderMarkdown(lastResult.body)}
-              </div>
-            ) : (
-              <div className="border border-dashed border-gray-300 rounded-lg p-4 text-center text-gray-500">
-                Run Plan or Codegen to see results here.
-              </div>
-            )}
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
 
   const dropZoneClasses = 'min-h-[120px] border border-slate-800 rounded-xl p-4 bg-slate-900/50 backdrop-blur shadow-inner';
 
-  const ensureWidgetInMain = (widget?: string) => {
-    if (!widget) return;
-    setWidgetZones((prev) => {
-      const next: typeof prev = { header: [], main: [], secondary: [], footer: [] };
-      (Object.keys(prev) as (keyof typeof prev)[]).forEach((zone) => {
-        next[zone] = prev[zone].filter((w) => w !== widget);
-      });
-      if (!next.main.includes(widget)) next.main = [...next.main, widget];
-      return next;
-    });
-  };
-
   const scrollToZone = (target: keyof typeof zoneRefs, widget?: string) => {
-    ensureWidgetInMain(widget);
-    const el = document.getElementById(target) || zoneRefs[target]?.current;
+    const el = zoneRefs[target].current;
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setActiveZone(target);
     }
-    setActiveZone(target);
-    if (typeof window !== 'undefined') {
-      window.location.hash = target;
+    if (widget) {
+      setWidgetZones((prev) => {
+        if (prev[target].includes(widget)) return prev;
+        return { ...prev, [target]: [...prev[target], widget] };
+      });
     }
   };
 
@@ -746,21 +491,23 @@ const Dashboard: React.FC = () => {
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => handleDrop(e, zone)}
     >
-      <div className="flex items-center justify-between mb-2 text-sm font-semibold text-gray-700">
+      <div className="flex items-center justify-between mb-2 text-sm font-semibold text-slate-200">
         <span>{title}</span>
-        <span className="text-gray-400">Drop widgets here</span>
+        <span className="text-slate-500">Drop widgets here</span>
       </div>
       <div className="space-y-3">
         {widgetZones[zone].map((w) => (
           <div
             key={`${zone}-${w}`}
-            className="border border-gray-200 rounded-md bg-white shadow-sm"
-            draggable
-            onDragStart={(e) => handleDragStart(e, w)}
+            className="border border-slate-800 rounded-md bg-slate-950/70 shadow-sm"
           >
-            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50 cursor-move">
-              <span className="text-sm font-medium text-gray-800 capitalize">{w}</span>
-              <span className="text-gray-400 text-xs">⇅</span>
+            <div
+              className="flex items-center justify-between px-3 py-2 border-b border-slate-800 bg-slate-900 cursor-move"
+              draggable
+              onDragStart={(e) => handleDragStart(e, w)}
+            >
+              <span className="text-sm font-medium text-slate-100 capitalize">{w}</span>
+              <span className="text-slate-500 text-xs">⇅</span>
             </div>
             <div className="p-3">{renderWidget(w)}</div>
           </div>
@@ -769,24 +516,10 @@ const Dashboard: React.FC = () => {
     </div>
   );
 
-  const startResizing = (e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setResizing(true);
-  };
-
-  const stopResizing = () => setResizing(false);
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!resizing) return;
-    const container = e.currentTarget.getBoundingClientRect();
-    const relativeX = e.clientX - container.left;
-    const percent = Math.min(75, Math.max(25, (relativeX / container.width) * 100));
-    setMainWidth(percent);
-  };
-
   return (
     <>
       <div
-        className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex"
+        className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex overflow-x-hidden"
         onMouseMove={handleMouseMove}
         onMouseUp={stopResizing}
       >
@@ -804,7 +537,6 @@ const Dashboard: React.FC = () => {
                     ? 'bg-slate-800 text-white shadow-inner'
                     : 'text-slate-200 hover:bg-slate-800/80'
                 }`}
-                type="button"
                 onClick={() => scrollToZone(item.target, item.widget)}
               >
                 {item.label}
@@ -816,8 +548,8 @@ const Dashboard: React.FC = () => {
 
         <div className="flex-1 flex flex-col">
           <datalist id="modelOptionsList">
-            {modelOptions.map((opt) => (
-              <option key={opt} value={opt} />
+            {modelOptions.map((opt, idx) => (
+              <option key={`${opt}-${idx}`} value={opt} />
             ))}
           </datalist>
           <header className="bg-slate-900/70 border-b border-slate-800 shadow-lg backdrop-blur">
@@ -845,17 +577,6 @@ const Dashboard: React.FC = () => {
               <div className="flex-1" />
               <div className="flex items-center gap-3 text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-300">Layout</span>
-                  <select
-                    className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    onChange={(e) => applyPreset(e.target.value as keyof typeof layoutPresets)}
-                  >
-                    <option value="balanced">Balanced</option>
-                    <option value="tasks-focused">Tasks Focused</option>
-                    <option value="agents-focused">Agents Focused</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
                   <span className="text-slate-300">Planner</span>
                   <input
                     list="modelOptionsList"
@@ -882,53 +603,6 @@ const Dashboard: React.FC = () => {
                     value={ragK}
                     onChange={(e) => setRagK(Number(e.target.value) || 1)}
                   />
-                  <span className="text-slate-400 text-xs">Uptime: {Math.floor(uptimeMs / 1000)}s</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-300">Add model</span>
-                  <input
-                    className="w-40 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="model id"
-                    value={newModel.name}
-                    onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
-                  />
-                  <select
-                    className="w-32 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    value={newModel.provider}
-                    onChange={(e) => setNewModel({ ...newModel, provider: e.target.value })}
-                  >
-                    <option value="ollama">Ollama (local)</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Claude</option>
-                    <option value="xai">xAI</option>
-                    <option value="http">Custom HTTP</option>
-                  </select>
-                  <input
-                    className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="API key (optional)"
-                    value={newModel.apiKey}
-                    onChange={(e) => setNewModel({ ...newModel, apiKey: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded-md bg-slate-800 text-slate-100 border border-slate-700 hover:bg-slate-700"
-                    onClick={() => {
-                      if (!newModel.name.trim()) {
-                        setToast({ text: 'Model id required', type: 'error' });
-                        return;
-                      }
-                      const entry = { ...newModel };
-                      setCustomModels((prev) => {
-                        const filtered = prev.filter((m) => m.name !== entry.name.trim());
-                        return [...filtered, { ...entry, name: entry.name.trim() }];
-                      });
-                      setNewModel({ name: '', provider: 'ollama', apiKey: '', endpoint: '' });
-                      setToast({ text: 'Model saved locally', type: 'success' });
-                    }}
-                  >
-                    Save
-                  </button>
                 </div>
               </div>
             </div>
@@ -1025,165 +699,34 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Task Modal */}
-      {showTaskModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">{editingTaskId ? 'Edit Task' : 'New Task'}</h2>
-              <button
-                className="text-gray-500 hover:text-gray-700"
-                onClick={() => {
-                  setShowTaskModal(false);
-                  setEditingTaskId(null);
-                  setFormError('');
-                }}
-              >
-                ✕
-              </button>
-            </div>
-            {formError && <p className="text-red-600 mb-3 text-sm">{formError}</p>}
-            <form className="space-y-4" onSubmit={handleTaskSubmit}>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Title</label>
-                <input
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  value={taskForm.title}
-                  onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Description</label>
-                <textarea
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  rows={3}
-                  value={taskForm.description}
-                  onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Priority</label>
-                <select
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  value={taskForm.priority}
-                  onChange={(e) => setTaskForm({ ...taskForm, priority: e.target.value })}
-                >
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                  <option value="urgent">Urgent</option>
-                </select>
-              </div>
-              <div className="flex justify-end space-x-3">
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
-                  onClick={() => {
-                    setShowTaskModal(false);
-                    setEditingTaskId(null);
-                    setFormError('');
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
-                >
-                  {editingTaskId ? 'Save Changes' : 'Create Task'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <TaskModal
+        open={showTaskModal}
+        form={taskForm}
+        error={formError}
+        editingId={editingTaskId}
+        onChange={(next) => setTaskForm(next)}
+        onClose={() => {
+          setShowTaskModal(false);
+          setEditingTaskId(null);
+          setFormError('');
+        }}
+        onSubmit={handleTaskSubmit}
+      />
 
-      {/* Agent Modal */}
-      {showAgentModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">{editingAgentId ? 'Edit Agent' : 'Register Agent'}</h2>
-              <button
-                className="text-gray-500 hover:text-gray-700"
-                onClick={() => {
-                  setShowAgentModal(false);
-                  setEditingAgentId(null);
-                  setFormError('');
-                }}
-              >
-                ✕
-              </button>
-            </div>
-            {formError && <p className="text-red-600 mb-3 text-sm">{formError}</p>}
-            <form className="space-y-4" onSubmit={handleAgentSubmit}>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Name (unique)</label>
-                <input
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  value={agentForm.name}
-                  onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Display Name</label>
-                <input
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  value={agentForm.displayName}
-                  onChange={(e) => setAgentForm({ ...agentForm, displayName: e.target.value })}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Description</label>
-                <textarea
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  rows={2}
-                  value={agentForm.description}
-                  onChange={(e) => setAgentForm({ ...agentForm, description: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Capabilities (comma separated)</label>
-                <input
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  value={agentForm.capabilities}
-                  onChange={(e) => setAgentForm({ ...agentForm, capabilities: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Models (comma separated)</label>
-                <input
-                  className="mt-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                  value={agentForm.models}
-                  onChange={(e) => setAgentForm({ ...agentForm, models: e.target.value })}
-                />
-              </div>
-              <div className="flex justify-end space-x-3">
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
-                  onClick={() => {
-                    setShowAgentModal(false);
-                    setEditingAgentId(null);
-                    setFormError('');
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700"
-                >
-                  {editingAgentId ? 'Save Changes' : 'Register Agent'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <AgentModal
+        open={showAgentModal}
+        form={agentForm}
+        error={formError}
+        editingId={editingAgentId}
+        modelOptions={modelOptions}
+        onChange={(next) => setAgentForm(next)}
+        onClose={() => {
+          setShowAgentModal(false);
+          setEditingAgentId(null);
+          setFormError('');
+        }}
+        onSubmit={handleAgentSubmit}
+      />
 
       {/* Result Modal */}
       {resultModal && (
@@ -1206,8 +749,8 @@ const Dashboard: React.FC = () => {
                 {resultModal.meta.error && <div className="text-red-600">Error: {resultModal.meta.error}</div>}
               </div>
             )}
-            <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-96 overflow-auto text-sm text-gray-900">
-              {renderMarkdown(resultModal.body)}
+            <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-96 overflow-auto text-sm text-gray-900 whitespace-pre-wrap">
+              {resultModal.body}
             </div>
             <div className="flex justify-end mt-4">
               <button
@@ -1225,10 +768,14 @@ const Dashboard: React.FC = () => {
       {toast && (
         <div className="fixed top-4 right-4 z-50">
           <div
-            className={`rounded-md px-4 py-3 shadow-lg text-white ${toast.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`}
-            onAnimationEnd={() => setToast(null)}
+            className={`rounded-md px-4 py-3 shadow-lg text-white max-w-sm break-words ${toast.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`}
           >
-            {toast.text}
+            <div className="flex items-start gap-3">
+              <span className="flex-1">{toast.text}</span>
+              <button className="text-white/80 hover:text-white" onClick={() => setToast(null)} aria-label="Close toast">
+                ✕
+              </button>
+            </div>
           </div>
         </div>
       )}

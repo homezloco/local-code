@@ -31,6 +31,15 @@ const Agent = db.sequelize.define('Agent', {
     type: DataTypes.JSON,
     allowNull: false
   },
+  healthUrl: {
+    type: DataTypes.STRING
+  },
+  capabilityTags: {
+    type: DataTypes.JSON
+  },
+  lastHealth: {
+    type: DataTypes.DATE
+  },
   status: {
     type: DataTypes.ENUM('active', 'inactive', 'maintenance'),
     defaultValue: 'active'

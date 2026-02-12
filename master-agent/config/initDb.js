@@ -1,15 +1,39 @@
 const db = require('./database');
 const Task = require('../models/Task');
 const Agent = require('../models/Agent');
+const Suggestion = require('../models/Suggestion');
+const Template = require('../models/Template');
+const DelegationRun = require('../models/DelegationRun');
+const MasterProfile = require('../models/MasterProfile');
+const ChatLog = require('../models/ChatLog');
+const PlanLog = require('../models/PlanLog');
 
 db.models.Task = Task;
 db.models.Agent = Agent;
+db.models.Suggestion = Suggestion;
+db.models.Template = Template;
+db.models.DelegationRun = DelegationRun;
+db.models.MasterProfile = MasterProfile;
+db.models.ChatLog = ChatLog;
+db.models.PlanLog = PlanLog;
 
 async function initDatabase() {
   try {
     await db.sequelize.sync({ force: false });
     console.log('Database synchronized successfully');
     
+    // Seed master profile if missing
+    const existingProfile = await MasterProfile.findOne();
+    if (!existingProfile) {
+      await MasterProfile.create({
+        name: 'master-agent',
+        displayName: 'Master Agent',
+        persona: 'Orchestrator focused on clarity, brevity, and actionable steps.',
+        traits: { tone: 'concise', risk: 'cautious', domain: 'general' },
+        variables: { defaultModel: 'codellama:7b-instruct-q4_0' }
+      });
+    }
+
     // Create default agents if they don't exist
     const defaultAgents = [
       {
@@ -17,12 +41,105 @@ async function initDatabase() {
         displayName: 'Master Agent',
         description: 'Central coordination hub for all agents',
         capabilities: ['task-management', 'agent-delegation', 'workflow-orchestration'],
+        capabilityTags: ['orchestrator'],
         models: ['master-coordinator'],
         endpoints: {
           register: '/agents/register',
           delegate: '/tasks/delegate',
           status: '/agents/status'
-        }
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
+      },
+      {
+        name: 'email-agent',
+        displayName: 'Email Agent',
+        description: 'Manages email drafting, sending, and inbox triage',
+        capabilities: ['email-drafting', 'email-sending', 'inbox-triage'],
+        capabilityTags: ['communication', 'email'],
+        models: ['writer-base'],
+        endpoints: {
+          register: '/agents/register',
+          delegate: '/tasks/delegate',
+          status: '/agents/status'
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
+      },
+      {
+        name: 'social-media-agent',
+        displayName: 'Social Media Agent',
+        description: 'Plans and posts social updates, tracks engagement',
+        capabilities: ['content-planning', 'post-scheduling', 'engagement-tracking'],
+        capabilityTags: ['social', 'content'],
+        models: ['writer-base'],
+        endpoints: {
+          register: '/agents/register',
+          delegate: '/tasks/delegate',
+          status: '/agents/status'
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
+      },
+      {
+        name: 'coding-agent',
+        displayName: 'Coding Agent',
+        description: 'Handles code generation, fixes, and reviews',
+        capabilities: ['code-generation', 'bug-fixing', 'code-review'],
+        capabilityTags: ['code', 'dev'],
+        models: ['coder-base'],
+        endpoints: {
+          register: '/agents/register',
+          delegate: '/tasks/delegate',
+          status: '/agents/status'
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
+      },
+      {
+        name: 'investment-agent',
+        displayName: 'Investment Agent',
+        description: 'Researches markets and produces investment briefs',
+        capabilities: ['market-research', 'portfolio-insights', 'risk-analysis'],
+        capabilityTags: ['finance', 'research'],
+        models: ['analysis-base'],
+        endpoints: {
+          register: '/agents/register',
+          delegate: '/tasks/delegate',
+          status: '/agents/status'
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
+      },
+      {
+        name: 'business-management-agent',
+        displayName: 'Business Management Agent',
+        description: 'Coordinates operations, tasks, and reporting',
+        capabilities: ['ops-coordination', 'task-tracking', 'reporting'],
+        capabilityTags: ['operations'],
+        models: ['planner-base'],
+        endpoints: {
+          register: '/agents/register',
+          delegate: '/tasks/delegate',
+          status: '/agents/status'
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
+      },
+      {
+        name: 'security-agent',
+        displayName: 'Security Agent',
+        description: 'Monitors and enforces security policies and incident response',
+        capabilities: ['threat-detection', 'policy-enforcement', 'incident-response'],
+        capabilityTags: ['security'],
+        models: ['analysis-base'],
+        endpoints: {
+          register: '/agents/register',
+          delegate: '/tasks/delegate',
+          status: '/agents/status'
+        },
+        healthUrl: '/health',
+        lastHealth: new Date()
       }
     ];
 
