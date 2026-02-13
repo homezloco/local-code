@@ -39,3 +39,4 @@ __pycache__/
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+master-agent/database.sqlite*
