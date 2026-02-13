@@ -284,6 +284,130 @@ const Dashboard: React.FC = () => {
             defaultRagK={profileForm.ragKDefault}
           />
         );
+      case 'tasks': {
+        const filtered = tasks.filter((t) => {
+          const statusOk = taskStatusFilter === 'all' || t.status === taskStatusFilter;
+          const priorityOk = taskPriorityFilter === 'all' || t.priority === taskPriorityFilter;
+          const searchOk = !taskSearch || `${t.title} ${t.description}`.toLowerCase().includes(taskSearch.toLowerCase());
+          return statusOk && priorityOk && searchOk;
+        });
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Tasks</h3>
+              <button
+                className="text-sm px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white"
+                onClick={() => {
+                  setFormError('');
+                  setShowTaskModal(true);
+                }}
+              >
+                + New Task
+              </button>
+            </div>
+            {filtered.length === 0 ? (
+              <div className="text-slate-400 text-sm">No tasks yet.</div>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-auto">
+                {filtered.map((t) => (
+                  <div key={t.id} className="rounded border border-slate-800 bg-slate-900/80 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-100">{t.title}</div>
+                      <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-200 capitalize">{t.status}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">{t.description}</div>
+                    <div className="text-[11px] text-slate-500 mt-1">Priority: {t.priority}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      }
+      case 'agents':
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Agents</h3>
+              <button
+                className="text-sm px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white"
+                onClick={() => {
+                  setFormError('');
+                  setShowAgentModal(true);
+                }}
+              >
+                + Register Agent
+              </button>
+            </div>
+            {agents.length === 0 ? (
+              <div className="text-slate-400 text-sm">No agents found.</div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {agents.map((a) => (
+                  <div key={a.id} className="rounded border border-slate-800 bg-slate-900/80 p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-100">{a.displayName || a.name}</div>
+                        <div className="text-[11px] text-slate-500">{a.name}</div>
+                      </div>
+                      <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-200 capitalize">{a.status || 'active'}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1 line-clamp-2">{a.description}</div>
+                    <div className="text-[11px] text-slate-500 mt-1">Models: {(a.models || []).join(', ') || 'n/a'}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      case 'templates':
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Templates</h3>
+              <button
+                className="text-sm px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
+                onClick={() => setShowTaskModal(true)}
+              >
+                Use Template
+              </button>
+            </div>
+            {templates.length === 0 ? (
+              <div className="text-slate-400 text-sm">No templates yet.</div>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-auto">
+                {templates.map((tpl) => (
+                  <div key={tpl.id} className="rounded border border-slate-800 bg-slate-900/80 p-3">
+                    <div className="text-sm font-semibold text-slate-100">{tpl.title}</div>
+                    <div className="text-xs text-slate-400 mt-1 line-clamp-2">{tpl.description}</div>
+                    <div className="text-[11px] text-slate-500 mt-1">Agents: {(tpl.agents || []).join(', ')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      case 'delegation':
+        return (
+          <div className="space-y-2">
+            <h3 className="text-lg font-semibold text-white">Delegation Timeline</h3>
+            <DelegationTimeline entries={Object.values(delegationLogs).flat()} />
+          </div>
+        );
+      case 'settings':
+        return (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold text-white">Settings</h3>
+            <button
+              className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm"
+              onClick={() => saveProfile()}
+              disabled={profileLoading}
+            >
+              {profileLoading ? 'Saving...' : 'Save Profile'}
+            </button>
+            {profileError && <div className="text-sm text-red-400">{profileError}</div>}
+          </div>
+        );
       case 'result':
         return lastResult ? (
           <div className="space-y-2">
@@ -458,10 +582,6 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
-
   const refreshData = async () => {
     try {
       setLoading(true);
@@ -482,7 +602,15 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
+    loadProfile();
+  }, []);
+
+  useEffect(() => {
     void refreshData();
+  }, []);
+
+  useEffect(() => {
+    void fetchTemplatesList();
   }, []);
 
   const navItems: { label: string; target: keyof typeof zoneRefs; widget?: string }[] = [
