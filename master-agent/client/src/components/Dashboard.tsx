@@ -421,8 +421,75 @@ const Dashboard: React.FC = () => {
         );
       case 'settings':
         return (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <h3 className="text-lg font-semibold text-white">Settings</h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Planner model</span>
+                <input
+                  list="modelOptionsList"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.defaultPlannerModel}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, defaultPlannerModel: e.target.value }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Coder model</span>
+                <input
+                  list="modelOptionsList"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.defaultCoderModel}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, defaultCoderModel: e.target.value }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Planner fallback</span>
+                <input
+                  list="modelOptionsList"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.fallbackPlannerModel}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, fallbackPlannerModel: e.target.value }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Coder fallback</span>
+                <input
+                  list="modelOptionsList"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.fallbackCoderModel}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, fallbackCoderModel: e.target.value }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>RAG k</span>
+                <input
+                  type="number"
+                  min={1}
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.ragKDefault}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, ragKDefault: Number(e.target.value) || 1 }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Planner timeout (ms)</span>
+                <input
+                  type="number"
+                  min={1000}
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.plannerTimeoutMs}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, plannerTimeoutMs: Number(e.target.value) || 1000 }))}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-200">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={profileForm.ragEnabled}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, ragEnabled: e.target.checked }))}
+                />
+                <span>Enable RAG by default</span>
+              </label>
+            </div>
             <button
               className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm"
               onClick={() => saveProfile()}
