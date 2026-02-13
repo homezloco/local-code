@@ -126,6 +126,7 @@ const Dashboard: React.FC = () => {
   const [delegationRunning, setDelegationRunning] = useState<Record<string, boolean>>({});
   const [delegationCancels, setDelegationCancels] = useState<Record<string, () => void>>({});
   const [chatPrefill, setChatPrefill] = useState('');
+  const delegationStreamRef = useRef<EventSource | null>(null);
 
   const [profileForm, setProfileForm] = useState({
     name: 'master-agent',
@@ -770,6 +771,74 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     void fetchTemplatesList();
   }, []);
+
+  const cleanupDelegationStream = () => {
+    if (delegationStreamRef.current) {
+      delegationStreamRef.current.close();
+      delegationStreamRef.current = null;
+    }
+  };
+
+  const fetchDelegationsFallback = async (taskId: string) => {
+    try {
+      const res = await axios.get(`${apiBase}/delegate/${taskId}/delegations`);
+      const delegations = res.data || [];
+      setDelegationLogs((prev) => ({
+        ...prev,
+        [taskId]: (Array.isArray(delegations) ? delegations : []).map((d: any) => ({
+          ts: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
+          event: 'message' as DelegationEvent,
+          data: d
+        }))
+      }));
+    } catch (err) {
+      console.error('Failed fallback fetch delegations', err);
+    }
+  };
+
+  const subscribeDelegationStream = (taskId: string) => {
+    cleanupDelegationStream();
+    try {
+      const es = new EventSource(`${apiBase}/delegate/${taskId}/delegations/stream`);
+      delegationStreamRef.current = es;
+      setDelegationRunning((prev) => ({ ...prev, [taskId]: true }));
+      setDelegationCancels((prev) => ({ ...prev, [taskId]: () => es.close() }));
+
+      es.addEventListener('delegations', (evt) => {
+        try {
+          const parsed = JSON.parse((evt as MessageEvent).data || '[]');
+          setDelegationLogs((prev) => ({
+            ...prev,
+            [taskId]: (Array.isArray(parsed) ? parsed : []).map((d: any) => ({
+              ts: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
+              event: 'message' as DelegationEvent,
+              data: d
+            }))
+          }));
+        } catch (err) {
+          console.error('Failed to parse delegation stream payload', err);
+        }
+      });
+
+      es.addEventListener('error', () => {
+        setDelegationRunning((prev) => ({ ...prev, [taskId]: false }));
+        cleanupDelegationStream();
+        void fetchDelegationsFallback(taskId);
+      });
+    } catch (err) {
+      console.error('Failed to open delegation stream', err);
+      void fetchDelegationsFallback(taskId);
+    }
+  };
+
+  useEffect(() => {
+    if (!editingTaskId) {
+      cleanupDelegationStream();
+      return;
+    }
+    subscribeDelegationStream(editingTaskId);
+    return () => cleanupDelegationStream();
+  }, [editingTaskId]);
 
   const navItems: { label: string; target: keyof typeof zoneRefs; widget?: string }[] = [
     { label: 'Dashboard', target: 'header' },
