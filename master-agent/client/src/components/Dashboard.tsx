@@ -19,6 +19,13 @@ interface Task {
   metadata?: any;
   createdAt: string;
   updatedAt: string;
+  latestDelegation?: {
+    id: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    events?: any;
+  } | null;
 }
 
 interface Agent {
@@ -313,13 +320,19 @@ const Dashboard: React.FC = () => {
             ) : (
               <div className="space-y-2 max-h-80 overflow-auto">
                 {filtered.map((t) => (
-                  <div key={t.id} className="rounded border border-slate-800 bg-slate-900/80 p-3">
-                    <div className="flex items-center justify-between">
+                  <div key={t.id} className="rounded border border-slate-800 bg-slate-900/80 p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-semibold text-slate-100">{t.title}</div>
                       <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-200 capitalize">{t.status}</span>
                     </div>
-                    <div className="text-xs text-slate-400 mt-1">{t.description}</div>
-                    <div className="text-[11px] text-slate-500 mt-1">Priority: {t.priority}</div>
+                    <div className="text-xs text-slate-400">{t.description}</div>
+                    <div className="text-[11px] text-slate-500">Priority: {t.priority}</div>
+                    {t.latestDelegation && (
+                      <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                        <span className="px-2 py-1 rounded bg-slate-800 text-slate-200 capitalize">Run: {t.latestDelegation.status}</span>
+                        <span>{new Date(t.latestDelegation.updatedAt).toLocaleTimeString()}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -719,9 +732,10 @@ const Dashboard: React.FC = () => {
       setLoading(true);
       setError('');
       const [tasksRes, agentsRes] = await Promise.all([
-        axios.get(`${apiBase}/tasks`),
+        axios.get(`${apiBase}/tasks`, { params: { includeDelegations: true } }),
         axios.get(`${apiBase}/agents`)
       ]);
+
       setTasks(tasksRes.data || []);
       let agentsList = agentsRes.data || [];
       // Auto-bootstrap default agents if none exist
