@@ -427,7 +427,7 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const defaultModels = ['llama3', 'llama3.1', 'qwen2.5-coder:14b', 'gpt-4o-mini', 'gpt-4o'];
+  const defaultModels = ['llama3', 'llama3.1', 'qwen2.5-coder:14b', 'gpt-4o-mini', 'gpt-4o', 'gemma3:1b'];
 
   const modelOptions: string[] = Array.from(
     new Set([
@@ -435,6 +435,8 @@ const Dashboard: React.FC = () => {
       coderModel,
       profileForm.defaultPlannerModel,
       profileForm.defaultCoderModel,
+      profileForm.fallbackPlannerModel,
+      profileForm.fallbackCoderModel,
       ...customModels.map((m) => m.name),
       ...defaultModels
     ].filter(Boolean))
