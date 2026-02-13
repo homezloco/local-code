@@ -323,7 +323,14 @@ const Dashboard: React.FC = () => {
                 {filtered.map((t) => (
                   <div key={t.id} className="rounded border border-slate-800 bg-slate-900/80 p-3 space-y-1">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-slate-100">{t.title}</div>
+                      <div className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+                        <span>{t.title}</span>
+                        {(t.metadata?.lastDelegation?.needsClarification || t.latestDelegation?.events?.needsClarification) && (
+                          <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-amber-900/60 text-amber-100 border border-amber-700">
+                            ⚠️ needs clarification
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-200 capitalize">{t.status}</span>
                     </div>
                     <div className="text-xs text-slate-400">{t.description}</div>
