@@ -127,6 +127,8 @@ const Dashboard: React.FC = () => {
   const [delegationCancels, setDelegationCancels] = useState<Record<string, () => void>>({});
   const [chatPrefill, setChatPrefill] = useState('');
   const delegationStreamRef = useRef<EventSource | null>(null);
+  const [streamingTaskId, setStreamingTaskId] = useState<string | null>(null);
+  const [streamingTaskTitle, setStreamingTaskTitle] = useState<string>('');
 
   const [profileForm, setProfileForm] = useState({
     name: 'master-agent',
@@ -341,6 +343,15 @@ const Dashboard: React.FC = () => {
                         <span>{new Date(t.latestDelegation.updatedAt).toLocaleTimeString()}</span>
                       </div>
                     )}
+                    <button
+                      className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white"
+                      onClick={() => {
+                        setStreamingTaskId(t.id);
+                        setStreamingTaskTitle(t.title);
+                      }}
+                    >
+                      Live Delegation Stream
+                    </button>
                   </div>
                 ))}
               </div>
@@ -449,7 +460,7 @@ const Dashboard: React.FC = () => {
       case 'delegation':
         return (
           <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-white">Delegation Timeline</h3>
+            <h3 className="text-lg font-semibold text-slate-100">Delegation Timeline</h3>
             <DelegationTimeline entries={Object.values(delegationLogs).flat()} />
           </div>
         );
@@ -807,6 +818,7 @@ const Dashboard: React.FC = () => {
     cleanupDelegationStream();
     try {
       const es = new EventSource(`${apiBase}/delegate/${taskId}/delegations/stream`);
+
       delegationStreamRef.current = es;
       setDelegationRunning((prev) => ({ ...prev, [taskId]: true }));
       setDelegationCancels((prev) => ({ ...prev, [taskId]: () => es.close() }));
@@ -838,14 +850,7 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    if (!editingTaskId) {
-      cleanupDelegationStream();
-      return;
-    }
-    subscribeDelegationStream(editingTaskId);
-    return () => cleanupDelegationStream();
-  }, [editingTaskId]);
+  const streamEntries = streamingTaskId ? delegationLogs[streamingTaskId] ?? [] : [];
 
   const navItems: { label: string; target: keyof typeof zoneRefs; widget?: string }[] = [
     { label: 'Dashboard', target: 'header' },
@@ -858,264 +863,56 @@ const Dashboard: React.FC = () => {
     { label: 'Settings', target: 'footer', widget: 'settings' }
   ];
 
-  const dropZoneClasses = 'min-h-[120px] border border-slate-800 rounded-xl p-4 bg-slate-900/50 backdrop-blur shadow-inner';
-
-  const scrollToZone = (target: keyof typeof zoneRefs, widget?: string) => {
-    const el = zoneRefs[target].current;
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setActiveZone(target);
-    }
-    if (widget) {
-      setWidgetZones((prev) => {
-        if (prev[target].includes(widget)) return prev;
-        return { ...prev, [target]: [...prev[target], widget] };
-      });
-    }
-  };
-
-  const renderZone = (zone: keyof typeof widgetZones, title: string) => (
-    <div
-      className={dropZoneClasses}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => handleDrop(e, zone)}
-    >
-      <div className="flex items-center justify-between mb-2 text-sm font-semibold text-slate-200">
-        <span>{title}</span>
-        <span className="text-slate-500">Drop widgets here</span>
-      </div>
-      <div className="space-y-3">
-        {widgetZones[zone].map((w) => (
-          <div
-            key={`${zone}-${w}`}
-            className="border border-slate-800 rounded-md bg-slate-950/70 shadow-sm"
-          >
-            <div
-              className="flex items-center justify-between px-3 py-2 border-b border-slate-800 bg-slate-900 cursor-move"
-              draggable
-              onDragStart={(e) => handleDragStart(e, w)}
-            >
-              <span className="text-sm font-medium text-slate-100 capitalize">{w}</span>
-              <span className="text-slate-500 text-xs">⇅</span>
-            </div>
-            <div className="p-3">{renderWidget(w)}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
   return (
     <>
-      <div
-        className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-black text-slate-100 flex overflow-x-hidden"
-        onMouseMove={handleMouseMove}
-        onMouseUp={stopResizing}
-      >
-        <aside className="w-64 bg-slate-900/80 border-r border-slate-800 hidden md:flex flex-col backdrop-blur shadow-xl">
-          <div className="px-4 py-5 border-b border-slate-800">
-            <div className="text-lg font-semibold text-white">Master Agent</div>
-            <div className="text-xs text-slate-400">Local dashboard</div>
-          </div>
-          <nav className="flex-1 px-4 py-4 space-y-2 text-sm">
-            {navItems.map((item) => (
-              <button
-                key={item.label}
-                className={`w-full text-left px-3 py-2 rounded-md transition-colors ${
-                  activeZone === item.target
-                    ? 'bg-slate-800 text-white shadow-inner'
-                    : 'text-slate-200 hover:bg-slate-800/80'
-                }`}
-                onClick={() => scrollToZone(item.target, item.widget)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-          <div className="px-4 py-4 text-xs text-slate-500 border-t border-slate-800">API: {new Date().toLocaleTimeString()}</div>
-        </aside>
-
-        <div className="flex-1 flex flex-col">
-          <datalist id="modelOptionsList">
-            {modelOptions.map((opt, idx) => (
-              <option key={`${opt}-${idx}`} value={opt} />
-            ))}
-          </datalist>
-          <header className="bg-slate-900/70 border-b border-slate-800 shadow-lg backdrop-blur">
-            <div className="px-4 sm:px-6 lg:px-8 py-4 flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-3">
+      {/* Delegation Stream Modal */}
+      {streamingTaskId && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Live Delegation Stream</h2>
+                <p className="text-xs text-slate-400">{streamingTaskTitle}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {delegationRunning[streamingTaskId] && (
+                  <span className="text-[11px] px-2 py-1 rounded-full bg-green-900/50 text-green-200 border border-green-700">Streaming</span>
+                )}
                 <button
-                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-4 py-2 rounded-lg shadow"
+                  className="text-slate-300 hover:text-white text-xl leading-none px-2"
                   onClick={() => {
-                    setFormError('');
-                    setShowTaskModal(true);
+                    cleanupDelegationStream();
+                    setStreamingTaskId(null);
+                    setStreamingTaskTitle('');
                   }}
                 >
-                  + New Task
-                </button>
-                <button
-                  className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-4 py-2 rounded-lg shadow"
-                  onClick={() => {
-                    setFormError('');
-                    setShowAgentModal(true);
-                  }}
-                >
-                  + Register Agent
+                  ✕
                 </button>
               </div>
-              <div className="flex-1" />
-              <div className="flex items-center gap-3 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-300">Planner</span>
-                  <input
-                    list="modelOptionsList"
-                    className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    value={plannerModel}
-                    onChange={(e) => setPlannerModel(e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-300">Coder</span>
-                  <input
-                    list="modelOptionsList"
-                    className="w-44 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    value={coderModel}
-                    onChange={(e) => setCoderModel(e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-300">RAG k</span>
-                  <input
-                    type="number"
-                    min={1}
-                    className="w-20 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    value={ragK}
-                    onChange={(e) => setRagK(Number(e.target.value) || 1)}
-                  />
-                </div>
-              </div>
             </div>
-          </header>
-
-          <div className="px-4 sm:px-6 lg:px-8 py-4 flex flex-col gap-6">
-            <section ref={zoneRefs.header} id="header" className="scroll-mt-20">
-              {renderZone('header', 'Header Zone')}
-            </section>
-
-            <div className="flex items-stretch gap-3 relative">
-              <section
-                ref={zoneRefs.main}
-                id="main"
-                className="bg-slate-900/60 rounded-xl shadow-lg flex-1 p-4 border border-slate-800 backdrop-blur scroll-mt-20"
-                style={{ width: `${mainWidth}%` }}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-lg font-semibold text-white">Main Content</h2>
-                  <div className="flex gap-2 text-sm">
-                    <div className="flex flex-col">
-                      <span className="text-slate-300">Status</span>
-                      <select
-                        className="mt-1 w-full rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        value={taskStatusFilter}
-                        onChange={(e) => setTaskStatusFilter(e.target.value)}
-                      >
-                        <option value="all">All</option>
-                        <option value="pending">Pending</option>
-                        <option value="in_progress">In Progress</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                      </select>
+            <div className="flex-1 overflow-auto p-4 space-y-2">
+              {streamEntries.length === 0 ? (
+                <div className="text-slate-400 text-sm">No delegation events yet.</div>
+              ) : (
+                streamEntries
+                  .slice()
+                  .sort((a, b) => a.ts - b.ts)
+                  .map((entry, idx) => (
+                    <div key={`${entry.ts}-${idx}`} className="flex items-start gap-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm">
+                      <span className="text-slate-300 font-semibold min-w-[80px]">{entry.event}</span>
+                      <span className="text-slate-200 whitespace-pre-wrap break-words flex-1">
+                        {typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data, null, 2)}
+                      </span>
+                      <span className="text-[11px] text-slate-500 min-w-[90px] text-right">
+                        {new Date(entry.ts).toLocaleTimeString()}
+                      </span>
                     </div>
-                    <div className="flex flex-col">
-                      <span className="text-slate-300">Priority</span>
-                      <select
-                        className="mt-1 w-full rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        value={taskPriorityFilter}
-                        onChange={(e) => setTaskPriorityFilter(e.target.value)}
-                      >
-                        <option value="all">All</option>
-                        <option value="low">Low</option>
-                        <option value="medium">Medium</option>
-                        <option value="high">High</option>
-                        <option value="urgent">Urgent</option>
-                      </select>
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-slate-300">Search</span>
-                      <input
-                        className="mt-1 w-56 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        placeholder="Search title or description"
-                        value={taskSearch}
-                        onChange={(e) => setTaskSearch(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </div>
-                {renderZone('main', 'Main Zone')}
-              </section>
-
-              <div
-                className="w-2 cursor-col-resize bg-slate-800/70 rounded-lg"
-                onMouseDown={startResizing}
-              />
-
-              <section
-                ref={zoneRefs.secondary}
-                id="secondary"
-                className="bg-slate-900/60 rounded-xl shadow-lg flex-1 p-4 border border-slate-800 backdrop-blur scroll-mt-20"
-                style={{ width: `${100 - mainWidth}%` }}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-lg font-semibold text-white">Secondary Content</h2>
-                  <div className="flex flex-col text-sm">
-                    <span className="text-slate-300">Agent Search</span>
-                    <input
-                      className="mt-1 w-56 rounded-md border border-slate-700 bg-slate-800/80 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                      placeholder="Search name or description"
-                      value={agentSearch}
-                      onChange={(e) => setAgentSearch(e.target.value)}
-                    />
-                  </div>
-                </div>
-                {renderZone('secondary', 'Secondary Zone')}
-              </section>
+                  ))
+              )}
             </div>
-
-            <section ref={zoneRefs.footer} id="footer" className="scroll-mt-20">
-              {renderZone('footer', 'Footer Zone')}
-            </section>
           </div>
         </div>
-      </div>
-
-      <TaskModal
-        open={showTaskModal}
-        form={taskForm}
-        error={formError}
-        editingId={editingTaskId}
-        onChange={(next) => setTaskForm(next)}
-        onClose={() => {
-          setShowTaskModal(false);
-          setEditingTaskId(null);
-          setFormError('');
-        }}
-        onSubmit={handleTaskSubmit}
-      />
-
-      <AgentModal
-        open={showAgentModal}
-        form={agentForm}
-        error={formError}
-        editingId={editingAgentId}
-        modelOptions={modelOptions}
-        onChange={(next) => setAgentForm(next)}
-        onClose={() => {
-          setShowAgentModal(false);
-          setEditingAgentId(null);
-          setFormError('');
-        }}
-        onSubmit={handleAgentSubmit}
-      />
+      )}
 
       {/* Result Modal */}
       {resultModal && (
