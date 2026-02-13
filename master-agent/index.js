@@ -99,6 +99,8 @@ pluginManager.loadPlugins().then(() => {
               : `${task.title || task.id || 'task'}\n${task.description || ''}`.trim();
             if (!taskText) continue;
             try {
+              // mark in progress before sending
+              await task.update({ status: 'in_progress' });
               const resp = await axios.post(
                 delegateUrl,
                 { task: taskText, agents: agentPayload, context: { useRAG: true, k: 4 } },
@@ -107,9 +109,15 @@ pluginManager.loadPlugins().then(() => {
               // Close stream immediately after connect; we just fire-and-forget
               resp.data?.destroy?.();
               logger.info(`Auto-delegated task ${task.id || task.title}`);
+              await task.update({ status: 'completed' });
             } catch (err) {
               const detail = err?.response?.data || err?.message;
               logger.error(`Auto-delegate failed for task ${task.id || task.title}: ${detail}`);
+              try {
+                await task.update({ status: 'failed' });
+              } catch (updateErr) {
+                logger.error(`Failed to update task status after delegate error: ${updateErr?.message}`);
+              }
             }
           }
           logger.info('Auto-delegate sweep complete');

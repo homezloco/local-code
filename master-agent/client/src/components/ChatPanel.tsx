@@ -25,9 +25,10 @@ interface ChatPanelProps {
   defaultCoderModel?: string;
   defaultRagEnabled?: boolean;
   defaultRagK?: number;
+  prefillText?: string;
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ tasks, agents, defaultPlannerModel, defaultCoderModel, defaultRagEnabled = true, defaultRagK = 6 }) => {
+const ChatPanel: React.FC<ChatPanelProps> = ({ tasks, agents, defaultPlannerModel, defaultCoderModel, defaultRagEnabled = true, defaultRagK = 6, prefillText = '' }) => {
   const [mode, setMode] = useState<ChatMode>('plan');
   const [input, setInput] = useState('');
   const [selection, setSelection] = useState('');
@@ -64,6 +65,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ tasks, agents, defaultPlannerMode
     if (model) return model;
     return mode === 'codegen' ? defaultCoderModel || '' : defaultPlannerModel || '';
   }, [model, mode, defaultPlannerModel, defaultCoderModel]);
+
+  useEffect(() => {
+    if (prefillText) {
+      setInput(prefillText);
+    }
+  }, [prefillText]);
 
   const onSend = () => {
     if (!input.trim()) return;

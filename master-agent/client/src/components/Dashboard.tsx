@@ -118,6 +118,7 @@ const Dashboard: React.FC = () => {
   const [delegationLogs, setDelegationLogs] = useState<Record<string, { ts: number; event: DelegationEvent; data: any }[]>>({});
   const [delegationRunning, setDelegationRunning] = useState<Record<string, boolean>>({});
   const [delegationCancels, setDelegationCancels] = useState<Record<string, () => void>>({});
+  const [chatPrefill, setChatPrefill] = useState('');
 
   const [profileForm, setProfileForm] = useState({
     name: 'master-agent',
@@ -282,8 +283,10 @@ const Dashboard: React.FC = () => {
             defaultCoderModel={profileForm.defaultCoderModel}
             defaultRagEnabled={profileForm.ragEnabled}
             defaultRagK={profileForm.ragKDefault}
+            prefillText={chatPrefill}
           />
         );
+
       case 'tasks': {
         const filtered = tasks.filter((t) => {
           const statusOk = taskStatusFilter === 'all' || t.status === taskStatusFilter;
@@ -377,10 +380,20 @@ const Dashboard: React.FC = () => {
             ) : (
               <div className="space-y-2 max-h-80 overflow-auto">
                 {templates.map((tpl) => (
-                  <div key={tpl.id} className="rounded border border-slate-800 bg-slate-900/80 p-3">
-                    <div className="text-sm font-semibold text-slate-100">{tpl.title}</div>
-                    <div className="text-xs text-slate-400 mt-1 line-clamp-2">{tpl.description}</div>
-                    <div className="text-[11px] text-slate-500 mt-1">Agents: {(tpl.agents || []).join(', ')}</div>
+                  <div key={tpl.id} className="rounded border border-slate-800 bg-slate-900/80 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-100">{tpl.title}</div>
+                        <div className="text-xs text-slate-400 mt-1 line-clamp-2">{tpl.description}</div>
+                        <div className="text-[11px] text-slate-500 mt-1">Agents: {(tpl.agents || []).join(', ')}</div>
+                      </div>
+                      <button
+                        className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white"
+                        onClick={() => setChatPrefill(`${tpl.title}\n${tpl.description}`.trim())}
+                      >
+                        Use
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -424,6 +437,31 @@ const Dashboard: React.FC = () => {
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-white">Settings</h3>
             <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Display name</span>
+                <input
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.displayName}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, displayName: e.target.value }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1">
+                <span>Internal name</span>
+                <input
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  value={profileForm.name}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </label>
+              <label className="text-sm text-slate-200 space-y-1 sm:col-span-2">
+                <span>Persona / personality</span>
+                <textarea
+                  className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
+                  rows={2}
+                  value={profileForm.persona}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, persona: e.target.value }))}
+                />
+              </label>
               <label className="text-sm text-slate-200 space-y-1">
                 <span>Planner model</span>
                 <input
