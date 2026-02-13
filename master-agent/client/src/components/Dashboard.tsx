@@ -591,7 +591,19 @@ const Dashboard: React.FC = () => {
         axios.get(`${apiBase}/agents`)
       ]);
       setTasks(tasksRes.data || []);
-      setAgents(agentsRes.data || []);
+      let agentsList = agentsRes.data || [];
+      // Auto-bootstrap default agents if none exist
+      if (!agentsList.length) {
+        try {
+          const bootstrapRes = await axios.post(`${apiBase}/agents/bootstrap`);
+          setToast({ text: bootstrapRes.data?.message || 'Bootstrapped agents', type: 'success' });
+          const refreshed = await axios.get(`${apiBase}/agents`);
+          agentsList = refreshed.data || [];
+        } catch (bootstrapErr) {
+          console.error('Failed to bootstrap agents', bootstrapErr);
+        }
+      }
+      setAgents(agentsList);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load tasks or agents';
       setError(msg);
