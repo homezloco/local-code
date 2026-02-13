@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('../config/logger');
-const BasePlugin = require('./BasePlugin');
+const { BasePlugin } = require('./BasePlugin');
 
 class PluginManager {
   constructor() {
@@ -25,9 +25,18 @@ class PluginManager {
         try {
           const pluginPath = path.join(this.pluginDir, file);
           const pluginModule = require(pluginPath);
-          const exportKey = Object.keys(pluginModule)[0];
-          const candidate = pluginModule[exportKey];
-          const plugin = typeof candidate === 'function' ? new candidate() : candidate;
+          const exported = pluginModule?.default || Object.values(pluginModule)[0];
+          if (!exported) {
+            logger.warn(`Invalid plugin structure (no export): ${pluginPath}`);
+            continue;
+          }
+
+          const plugin = typeof exported === 'function' ? new exported() : exported;
+
+          if (!plugin) {
+            logger.warn(`Invalid plugin structure (null/undefined): ${pluginPath}`);
+            continue;
+          }
 
           const isValidInstance = plugin instanceof BasePlugin;
           if (isValidInstance && plugin.name && plugin.version && typeof plugin.initialize === 'function') {

@@ -83,6 +83,7 @@ interface MasterProfile {
 }
 
 const Dashboard: React.FC = () => {
+  const apiBase = 'http://localhost:3001';
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -302,13 +303,16 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const defaultModels = ['llama3', 'llama3.1', 'qwen2.5-coder:14b', 'gpt-4o-mini', 'gpt-4o'];
+
   const modelOptions: string[] = Array.from(
     new Set([
       plannerModel,
       coderModel,
       profileForm.defaultPlannerModel,
       profileForm.defaultCoderModel,
-      ...customModels.map((m) => m.name)
+      ...customModels.map((m) => m.name),
+      ...defaultModels
     ].filter(Boolean))
   );
 
@@ -316,7 +320,7 @@ const Dashboard: React.FC = () => {
     e.preventDefault();
     setFormError('');
     try {
-      await axios.post('http://localhost:3001/tasks', {
+      await axios.post(`${apiBase}/tasks`, {
         title: taskForm.title.trim(),
         description: taskForm.description.trim(),
         priority: taskForm.priority
@@ -326,7 +330,7 @@ const Dashboard: React.FC = () => {
       setEditingTaskId(null);
       setTaskForm({ title: '', description: '', priority: 'medium' });
       // reload tasks
-      const res = await axios.get('http://localhost:3001/tasks');
+      const res = await axios.get(`${apiBase}/tasks`);
       setTasks(res.data || []);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to save task';
@@ -339,7 +343,7 @@ const Dashboard: React.FC = () => {
     e.preventDefault();
     setFormError('');
     try {
-      await axios.post('http://localhost:3001/agents/register', {
+      await axios.post(`${apiBase}/agents/register`, {
         name: agentForm.name.trim(),
         displayName: agentForm.displayName.trim(),
         description: agentForm.description.trim(),
@@ -350,7 +354,7 @@ const Dashboard: React.FC = () => {
       setShowAgentModal(false);
       setEditingAgentId(null);
       setAgentForm({ name: '', displayName: '', description: '', capabilities: 'task-management,agent-delegation', models: 'master-coordinator', preferredModel: '' });
-      const res = await axios.get('http://localhost:3001/agents');
+      const res = await axios.get(`${apiBase}/agents`);
       setAgents(res.data || []);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to save agent';
@@ -385,7 +389,7 @@ const Dashboard: React.FC = () => {
     try {
       setProfileLoading(true);
       setProfileError('');
-      const res = await axios.get('http://localhost:3001/profile');
+      const res = await axios.get(`${apiBase}/profile`);
       const p: MasterProfile = res.data;
       setProfileForm({
         name: p.name || 'master-agent',
@@ -422,7 +426,7 @@ const Dashboard: React.FC = () => {
     try {
       setProfileLoading(true);
       setProfileError('');
-      await axios.put('http://localhost:3001/profile', {
+      await axios.put(`${apiBase}/profile`, {
         name: profileForm.name.trim(),
         displayName: profileForm.displayName.trim(),
         persona: profileForm.persona.trim(),
@@ -456,6 +460,29 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     loadProfile();
+  }, []);
+
+  const refreshData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [tasksRes, agentsRes] = await Promise.all([
+        axios.get(`${apiBase}/tasks`),
+        axios.get(`${apiBase}/agents`)
+      ]);
+      setTasks(tasksRes.data || []);
+      setAgents(agentsRes.data || []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load tasks or agents';
+      setError(msg);
+      setToast({ text: msg, type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshData();
   }, []);
 
   const navItems: { label: string; target: keyof typeof zoneRefs; widget?: string }[] = [
