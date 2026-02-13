@@ -438,31 +438,6 @@ const Dashboard: React.FC = () => {
             )}
           </div>
         );
-      case 'suggestions':
-        return (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">Suggestions</h3>
-              <span className="text-xs text-slate-400">Latest clustered suggestions</span>
-            </div>
-            {suggestions.length === 0 ? (
-              <div className="text-slate-400 text-sm">No suggestions yet.</div>
-            ) : (
-              <div className="space-y-2 max-h-80 overflow-auto">
-                {suggestions.map((s) => (
-                  <div key={s.id} className="rounded border border-slate-800 bg-slate-900/80 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-slate-100">{s.title}</div>
-                      <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-200 capitalize">{s.status}</span>
-                    </div>
-                    <div className="text-xs text-slate-400 mt-1 line-clamp-2">{s.body}</div>
-                    <div className="text-[11px] text-slate-500 mt-1">Agent: {s.agentName}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
       case 'delegation':
         return (
           <div className="space-y-2">

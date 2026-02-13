@@ -19,7 +19,9 @@ db.models.PlanLog = PlanLog;
 
 async function initDatabase() {
   try {
-    await db.sequelize.sync({ force: false });
+    // allow additive columns (e.g., iterations/events on task delegations) without destructive drops
+    await db.sequelize.sync({ force: false, alter: true });
+
     console.log('Database synchronized successfully');
     
     // Seed master profile if missing

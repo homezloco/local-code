@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euo pipefail 2>/dev/null || set -euo
 cd "$(dirname "$0")"
 
 PORT="${PORT:-3002}"

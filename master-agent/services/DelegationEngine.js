@@ -192,20 +192,27 @@ async function executeDelegate(delegationId, task, classification, options = {})
   const delegation = await TaskDelegation.findByPk(delegationId);
   if (!delegation) return;
 
+  const events = [];
+  const iterations = [];
+
   try {
     await delegation.update({ status: 'running', startedAt: new Date() });
     await task.update({ status: 'in_progress' });
 
+    events.push({ event: 'start', data: { taskId: task.id, agent: classification.agentName }, ts: Date.now() });
+
     // Build the prompt based on agent type
     const agentPrompt = buildAgentPrompt(classification.agentName, task);
 
-    // Call the agent-service /plan endpoint
-    const resp = await fetch(`${AGENT_SERVICE_URL}/plan`, {
+    const autonomous = options.autonomous !== undefined ? options.autonomous : true;
+    // Call the agent-service /execute endpoint (autonomous loop)
+    const resp = await fetch(`${AGENT_SERVICE_URL}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: agentPrompt,
+        task: agentPrompt,
         context: { useRAG: true, k: 8 },
+        autonomous,
         model: options.model || CLASSIFIER_MODEL,
         provider: options.provider,
         apiKey: options.apiKey,
@@ -219,33 +226,46 @@ async function executeDelegate(delegationId, task, classification, options = {})
     }
 
     const data = await resp.json();
+    const resultPlan = data.finalAnswer || data.plan || data.code || data.result || '';
+    const loopIterations = Array.isArray(data.iterations) ? data.iterations : [];
+    const loopEvents = Array.isArray(data.events) ? data.events : [];
     const result = {
-      plan: data.plan || data.code || JSON.stringify(data),
+      plan: resultPlan || JSON.stringify(data),
       model: data.modelTried,
       fallback: data.fallbackTried,
       provider: data.provider,
-      context: data.context
+      context: data.context,
+      status: data.status,
+      questions: data.questions || data.observation || null
     };
 
-    // Determine if task needs review or is auto-completable
-    const needsReview = classification.confidence < 0.7 || task.priority === 'urgent';
-    const finalStatus = needsReview ? 'review' : 'completed';
+    // merge remote iterations/events with local start event
+    events.push(...loopEvents.map((e) => ({ ...e }))); // shallow copy
+    iterations.push(...loopIterations.map((it) => ({ ...it })));
+
+    const needsClarification = data.status === 'needs_clarification';
+    const needsReview = needsClarification || classification.confidence < 0.7 || task.priority === 'urgent';
+    const finalStatus = needsClarification ? 'review' : needsReview ? 'review' : 'completed';
 
     await delegation.update({
       status: finalStatus,
       result,
+      iterations,
+      events,
       completedAt: new Date()
     });
 
     await task.update({
-      status: finalStatus,
+      status: needsClarification ? 'pending' : finalStatus,
       metadata: {
         ...(task.metadata || {}),
         lastDelegation: {
           delegationId,
           agentName: classification.agentName,
           result: result.plan || '',
-          completedAt: new Date().toISOString()
+          completedAt: new Date().toISOString(),
+          needsClarification,
+          questions: result.questions || null
         }
       }
     });
@@ -255,9 +275,14 @@ async function executeDelegate(delegationId, task, classification, options = {})
     const errorMsg = err?.message || String(err);
     logger.error(`Delegation ${delegationId} failed: ${errorMsg}`);
 
+    events.push({ event: 'error', data: { message: errorMsg }, ts: Date.now() });
+    iterations.push({ thought: 'Error during delegation', action: 'error', observation: errorMsg, ts: Date.now() });
+
     await delegation.update({
       status: 'failed',
       error: errorMsg,
+      iterations,
+      events,
       completedAt: new Date()
     });
 
@@ -275,7 +300,12 @@ async function executeDelegate(delegationId, task, classification, options = {})
  * Build a specialized prompt based on the agent type.
  */
 function buildAgentPrompt(agentName, task) {
-  const base = `Task: ${task.title}\nDescription: ${task.description || 'No description'}\nPriority: ${task.priority}`;
+  const clarifications = Array.isArray(task.metadata?.clarifications)
+    ? task.metadata.clarifications
+        .map((c, idx) => `# Clarification ${idx + 1}\n${c.answer || c}`)
+        .join('\n\n')
+    : '';
+  const base = `Task: ${task.title}\nDescription: ${task.description || 'No description'}\nPriority: ${task.priority}$${clarifications ? '\n\nUser Clarifications:\n' + clarifications : ''}`;
 
   switch (agentName) {
     case 'email-agent':

@@ -7,7 +7,7 @@ interface TasksWidgetProps {
   openTaskModalForEdit: (task: Task) => void;
   runPlan: (task: Task) => void;
   runCodegen: (task: Task) => void;
-  onDelegate: (task: Task) => void;
+  onDelegate: (task: Task, opts?: { autonomous?: boolean }) => void;
   onViewCode?: (task: Task) => void;
   actionLoading?: boolean;
 }
@@ -39,6 +39,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
   actionLoading,
 }) => {
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
+  const [autoFlags, setAutoFlags] = useState<Record<string, boolean>>({});
   const [fullResultModal, setFullResultModal] = useState<FullResultModal | null>(null);
 
   const toggleResult = (id: string) => {
@@ -73,7 +74,12 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
     )}
     {filteredTasks.map((task: Task) => {
       const status = task.status as string;
-      const delegation = task.metadata?.lastDelegation as { agentName?: string; result?: string; completedAt?: string } | undefined;
+      const delegation = task.metadata?.lastDelegation as {
+        agentName?: string;
+        result?: string;
+        completedAt?: string;
+        needsClarification?: boolean;
+      } | undefined;
       const lastError = task.metadata?.lastError as { error?: string; at?: string } | undefined;
       const isDelegated = status === 'delegated' || status === 'in_progress';
       const isFinished = status === 'completed' || status === 'review' || status === 'failed';
@@ -94,6 +100,11 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
               <h3 className="font-medium text-white flex items-center gap-2">
                 <span>{STATUS_ICONS[status] || '📋'}</span>
                 {task.title}
+                {delegation?.needsClarification && (
+                  <span className="ml-2 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-amber-900/60 text-amber-100 border border-amber-700">
+                    ⚠️ needs clarification
+                  </span>
+                )}
               </h3>
               <p className="text-sm text-gray-300 mt-1">{task.description}</p>
               <div className="flex items-center mt-2 space-x-2 flex-wrap gap-y-1">
@@ -214,6 +225,17 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                 >
                   Edit
                 </button>
+                <label className="flex items-center gap-1 text-xs text-purple-200">
+                  <input
+                    type="checkbox"
+                    className="accent-purple-500"
+                    checked={!!autoFlags[task.id]}
+                    onChange={(e) =>
+                      setAutoFlags((prev) => ({ ...prev, [task.id]: e.target.checked }))
+                    }
+                  />
+                  Autonomous
+                </label>
                 {!isFinished && (
                   <>
                     <button
@@ -244,10 +266,10 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                 <button
                   type="button"
                   className="text-purple-400 hover:text-purple-300 text-sm font-semibold"
-                  onClick={() => onDelegate(task)}
+                  onClick={() => onDelegate(task, { autonomous: !!autoFlags[task.id] })}
                   disabled={actionLoading || isDelegated}
                 >
-                  {isDelegated ? '⏳ Working...' : isFinished ? '🔄 Re-delegate' : '🤖 Delegate'}
+                  {isDelegated ? '⏳ Working...' : isFinished ? '🔄 Re-delegate' : autoFlags[task.id] ? '🤖 Auto Delegate' : '🤖 Delegate'}
                 </button>
               </div>
             </div>

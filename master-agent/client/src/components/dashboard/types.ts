@@ -20,6 +20,9 @@ export interface TaskDelegation {
   confidence: number | null;
   input: any;
   result: any;
+  iterations?: any[];
+  events?: any[];
+  questions?: string | string[] | null;
   error: string | null;
   model: string | null;
   provider: string | null;

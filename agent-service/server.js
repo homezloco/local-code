@@ -28,12 +28,12 @@ app.use(
 
 const PORT = process.env.PORT || 7788;
 const RAG_URL = process.env.RAG_URL || 'http://127.0.0.1:7777';
-const PLANNER_MODEL = process.env.PLANNER_MODEL || 'codellama:instruct';
+const PLANNER_MODEL = process.env.PLANNER_MODEL || 'llama3';
 const CODER_MODEL = process.env.CODER_MODEL || 'qwen2.5-coder:14b';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 
-const FALLBACK_PLANNER_MODEL = process.env.FALLBACK_PLANNER_MODEL || null;
-const FALLBACK_CODER_MODEL = process.env.FALLBACK_CODER_MODEL || null;
+const FALLBACK_PLANNER_MODEL = process.env.FALLBACK_PLANNER_MODEL || 'llama3.1:8b';
+const FALLBACK_CODER_MODEL = process.env.FALLBACK_CODER_MODEL || 'codellama:7b-instruct-q4_0';
 
 const OLLAMA_RETRIES = Number(process.env.OLLAMA_RETRIES || 0);
 
@@ -381,6 +381,106 @@ app.post('/codegen', async (req, res) => {
   } catch (error) {
     console.error('Codegen error:', error);
     res.status(502).json({ error: 'Failed to generate code', detail: error?.message || String(error) });
+  }
+});
+
+// Autonomous ReAct-style execute loop (non-streaming)
+app.post('/execute', async (req, res) => {
+  try {
+    const { task, context = {}, maxIterations = 6, autonomous = true } = req.body || {};
+    if (!task || typeof task !== 'string') {
+      return res.status(400).json({ error: 'task is required' });
+    }
+
+    let ragContext = [];
+    let ragError = null;
+    if (context?.useRAG) {
+      try {
+        const response = await fetch(`${RAG_URL}/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: task, k: context.k || 8 })
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`RAG search failed ${response.status}: ${text}`);
+        }
+        const data = await response.json();
+        ragContext = data.results || [];
+      } catch (err) {
+        ragError = err?.message || String(err);
+      }
+    }
+
+    const ctxText = ragContext
+      .map((c, idx) => `# Context ${idx + 1}\n${c.text || c.content || ''}`)
+      .join('\n\n');
+
+    const iterations = [];
+    const events = [];
+    const model = await selectModel(req.body.model, PLANNER_MODEL);
+    const providerPayload = {
+      provider: req.body.provider,
+      apiKey: req.body.apiKey,
+      endpoint: req.body.endpoint
+    };
+
+    const baseSystem = `You are an autonomous agent following a short ReAct loop. Respond ONLY in JSON with keys: thought, action, observation, status. status can be one of: continue, final_answer, needs_clarification, error.`;
+
+    let status = 'continue';
+    let finalAnswer = null;
+    let iteration = 0;
+
+    while (status === 'continue' && iteration < maxIterations) {
+      iteration += 1;
+      const historyText = iterations
+        .map((it, idx) => `# Step ${idx + 1}\nThought: ${it.thought}\nAction: ${it.action}\nObservation: ${it.observation}`)
+        .join('\n\n');
+
+      const prompt = `${baseSystem}\n\nTask: ${task}\nContext:\n${ctxText || 'None'}\nHistory:\n${historyText || 'None'}\n\nReturn next JSON step. If done, set status to final_answer and include observation as the answer. If clarification is needed, set status to needs_clarification and include questions in observation.`;
+
+      try {
+        const response = await callOllama(model, prompt, FALLBACK_PLANNER_MODEL, providerPayload);
+        const parsed = safeJsonParse(response);
+        const thought = parsed?.thought || 'N/A';
+        const action = parsed?.action || 'unknown';
+        const observation = parsed?.observation || response;
+        status = parsed?.status || 'continue';
+
+        const step = { thought, action, observation, status, ts: Date.now() };
+        iterations.push(step);
+        events.push({ event: action, data: observation, ts: step.ts });
+
+        if (status === 'final_answer') {
+          finalAnswer = observation;
+          break;
+        }
+        if (status === 'needs_clarification' || status === 'error') {
+          break;
+        }
+      } catch (err) {
+        const errorMsg = err?.message || String(err);
+        iterations.push({ thought: 'Error', action: 'error', observation: errorMsg, status: 'error', ts: Date.now() });
+        events.push({ event: 'error', data: { message: errorMsg }, ts: Date.now() });
+        status = 'error';
+        break;
+      }
+    }
+
+    res.json({
+      task,
+      autonomous,
+      status,
+      finalAnswer,
+      iterations,
+      events,
+      context: { ragContext, ragError },
+      modelTried: model,
+      fallbackTried: FALLBACK_PLANNER_MODEL,
+      provider: providerPayload.provider
+    });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || 'execute failed' });
   }
 });
 

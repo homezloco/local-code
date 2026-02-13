@@ -35,6 +35,14 @@ const TaskDelegation = db.sequelize.define('TaskDelegation', {
     type: DataTypes.JSON,
     allowNull: true
   },
+  iterations: {
+    type: DataTypes.JSON,
+    allowNull: true
+  },
+  events: {
+    type: DataTypes.JSON,
+    allowNull: true
+  },
   error: {
     type: DataTypes.TEXT,
     allowNull: true
