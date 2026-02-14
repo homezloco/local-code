@@ -38,6 +38,72 @@ const AGENT_CAPABILITIES = {
 
 };
 
+const MAX_CONCURRENT_DELEGATIONS = Number(process.env.MAX_CONCURRENT_DELEGATIONS || 5);
+const PRIORITY_MAP = { urgent: 4, high: 3, medium: 2, low: 1 };
+
+/**
+ * Process the delegation queue. Checks for available slots and starts highest priority tasks.
+ */
+async function processQueue() {
+  try {
+    const activeCount = await TaskDelegation.count({ where: { status: 'running' } });
+    if (activeCount >= MAX_CONCURRENT_DELEGATIONS) return;
+
+    const queued = await TaskDelegation.findAll({ where: { status: 'queued' } });
+    if (queued.length === 0) return;
+
+    // Sort by Priority DESC, then CreatedAt ASC
+    queued.sort((a, b) => {
+      const pA = PRIORITY_MAP[a.input?.priority] || 1;
+      const pB = PRIORITY_MAP[b.input?.priority] || 1;
+      if (pA !== pB) return pB - pA;
+      return new Date(a.createdAt) - new Date(b.createdAt);
+    });
+
+    const slots = MAX_CONCURRENT_DELEGATIONS - activeCount;
+    const toStart = queued.slice(0, slots);
+
+    for (const delegation of toStart) {
+      // Race condition check: ensure still queued
+      const fresh = await TaskDelegation.findByPk(delegation.id);
+      if (!fresh || fresh.status !== 'queued') continue;
+
+      const task = await Task.findByPk(delegation.taskId);
+      if (!task) {
+        await delegation.update({ status: 'failed', error: 'Task not found associated with delegation' });
+        continue;
+      }
+
+      // Mark as running immediately to reserve slot
+      await delegation.update({ status: 'running', startedAt: new Date() });
+      await task.update({ status: 'in_progress' });
+
+      const classification = {
+        agentName: delegation.agentName,
+        intent: delegation.intent,
+        confidence: delegation.confidence
+      };
+
+      const options = {
+        model: delegation.model,
+        provider: delegation.provider,
+        autonomous: delegation.input?.autonomous ?? true // Persist autonomous in input
+      };
+
+      // Trigger execution (fire and forget from here, but catch errors)
+      executeDelegate(delegation.id, task, classification, options).catch(async (err) => {
+        logger.error(`Queue execution failed for ${delegation.id}: ${err.message}`);
+        // Revert status if execution failed immediately (though executeDelegate handles most failures)
+        // If executeDelegate threw, it might not have logged failure to DB if early.
+        // But executeDelegate wraps in try/catch.
+        // So this catch is just for safety.
+      });
+    }
+  } catch (err) {
+    logger.error(`Error processing delegation queue: ${err.message}`);
+  }
+}
+
 function resolveAgentModel(agentName, explicitModel) {
   if (explicitModel) return explicitModel;
   // All agents default to the strongest local model; keep a typed fallback chain.
@@ -284,7 +350,8 @@ async function delegateTask(taskId, options = {}) {
       title: task.title,
       description: task.description,
       priority: task.priority,
-      metadata: task.metadata
+      metadata: task.metadata,
+      autonomous: options.autonomous // Persist for queue processing
     },
     model: resolveAgentModel(classification.agentName, options.model) || CLASSIFIER_MODEL,
     provider: options.provider || 'ollama'
@@ -296,12 +363,10 @@ async function delegateTask(taskId, options = {}) {
     assignedTo: classification.agentName
   });
 
-  logger.info(`Task ${taskId} delegated to ${classification.agentName} (confidence: ${classification.confidence})`);
+  logger.info(`Task ${taskId} delegated to ${classification.agentName} (confidence: ${classification.confidence}) - Queued`);
 
-  // Execute asynchronously (don't await — let it run in background)
-  executeDelegate(delegation.id, task, classification, options).catch((err) => {
-    logger.error(`Delegation execution failed for ${delegation.id}: ${err?.message || err}`);
-  });
+  // Trigger queue processing
+  processQueue().catch(err => logger.error(`Failed to process queue after delegation: ${err.message}`));
 
   return {
     delegationId: delegation.id,
@@ -510,6 +575,9 @@ async function executeDelegate(delegationId, task, classification, options = {})
         lastError: { delegationId, error: errorMsg, at: new Date().toISOString() }
       }
     });
+  } finally {
+    // Trigger next task in queue
+    processQueue().catch(err => logger.error(`Queue processing failed: ${err.message}`));
   }
 }
 
