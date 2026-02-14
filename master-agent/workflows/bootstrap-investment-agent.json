@@ -1,0 +1,20 @@
+{
+  "name": "bootstrap-investment-agent",
+  "description": "Prime investment-agent with market snapshot and watchlist check.",
+  "agent": "investment-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Market snapshot",
+      "description": "Gather major indices, rates, and volatility snapshot for today.",
+      "priority": "medium"
+    },
+    {
+      "title": "Watchlist review",
+      "description": "Review top watchlist tickers and flag notable moves or news.",
+      "priority": "medium"
+    }
+  ]
+}

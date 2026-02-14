@@ -6,7 +6,10 @@ const {
   getActiveDelegations,
   approveDelegation,
   rejectDelegation,
+  executeTaskLoop,
   classifyTask,
+  delegateToMultipleAgents,
+  delegateToAgentsParallel,
   AGENT_CAPABILITIES
 } = require('../services/DelegationEngine');
 
@@ -20,6 +23,18 @@ router.post('/:taskId/delegate', async (req, res) => {
 
     const result = await delegateTask(taskId, { agentName, model, provider, apiKey, endpoint, autonomous });
     res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Execute a task in a synchronous Thought/Action/Observation loop and return the delegation record
+router.post('/:taskId/execute', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { agentName, model, provider, apiKey, endpoint, autonomous } = req.body || {};
+    const result = await executeTaskLoop(taskId, { agentName, model, provider, apiKey, endpoint, autonomous });
+    res.json({ delegation: result });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -148,6 +163,54 @@ router.get('/capabilities', (_req, res) => {
     keywords: config.keywords
   }));
   res.json(capabilities);
+});
+
+// Multi-agent collaboration: sequential handoff
+router.post('/:taskId/delegate/chain', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { agents, model, provider, apiKey, endpoint, autonomous, continueOnError } = req.body;
+
+    if (!Array.isArray(agents) || agents.length === 0) {
+      return res.status(400).json({ error: 'agents array is required' });
+    }
+
+    const result = await delegateToMultipleAgents(taskId, agents, {
+      model,
+      provider,
+      apiKey,
+      endpoint,
+      autonomous,
+      continueOnError
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Multi-agent collaboration: parallel execution
+router.post('/:taskId/delegate/parallel', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { agents, model, provider, apiKey, endpoint, autonomous, useRAG } = req.body;
+
+    if (!Array.isArray(agents) || agents.length === 0) {
+      return res.status(400).json({ error: 'agents array is required' });
+    }
+
+    const result = await delegateToAgentsParallel(taskId, agents, {
+      model,
+      provider,
+      apiKey,
+      endpoint,
+      autonomous,
+      useRAG
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 module.exports = router;

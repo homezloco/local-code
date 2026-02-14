@@ -1,27 +1,15 @@
 # Master Agent
 
-The Master Agent is the central coordination hub for the Local Agentic Assistant ecosystem. It manages task delegation, agent registration, and workflow orchestration across specialized agents.
+The Master Agent is the central coordination hub for the Local Agentic Assistant ecosystem. It manages task delegation, agent registration, workflow orchestration, and provides the React dashboard.
 
 ## Features
 
-- **Task Management**: Create, track, and manage tasks across agents
-- **Agent Registration**: Dynamic registration of specialized agents
-- **Plugin System**: Extensible architecture for adding new capabilities
-- **Workflow Orchestration**: Coordinate complex multi-agent workflows
-- **REST API**: Comprehensive API for agent communication
-
-## Architecture
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Master Agent  │◄──►│   Specialized    │◄──►│   External      │
-│                 │    │   Agents         │    │   Services      │
-│  - Task Mgmt    │    │  - Email Agent   │    │  - Email        │
-│  - Agent Reg    │    │  - Calendar      │    │  - Calendar     │
-│  - Plugin Sys   │    │  - Project       │    │  - File Storage │
-│  - Workflow     │    │  - Coding        │    │  - APIs         │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
+- **Task Management**: Create, track, and manage tasks with priority levels and status tracking
+- **Agent Registry**: Dynamic registration of specialized agents with capabilities
+- **Auto-Delegation**: Scheduler that automatically delegates pending tasks to agents
+- **Profile Management**: User profile with model preferences and RAG settings
+- **Workflows**: Bootstrap workflows for agent initialization
+- **REST API**: Comprehensive API for all operations
 
 ## Quick Start
 
@@ -31,87 +19,113 @@ The Master Agent is the central coordination hub for the Local Agentic Assistant
    npm install
    ```
 
-2. **Start the Server**
+2. **Environment Variables**
+   Create a `.env` file (copy from `.env.example` if available):
+   ```
+   PORT=3001
+   CLIENT_PORT=3002
+   DELEGATE_URL=http://localhost:7788/delegate
+   AUTO_DELEGATE_ENABLED=true
+   DELEGATION_INTERVAL_MS=300000
+   ```
+
+3. **Start the Server**
    ```bash
    npm start
    ```
-   Or for development with auto-restart:
-   ```bash
-   npm run dev
-   ```
 
-3. **Environment Variables**
-   Copy `.env.example` to `.env` and configure as needed.
+   The server will create `database.sqlite` if it doesn't exist.
+
+4. **Start the Dashboard** (in separate terminal)
+   ```bash
+   cd client
+   npm install
+   npm start
+   ```
 
 ## API Endpoints
 
 ### Tasks
-- `GET /tasks` - Get all tasks
-- `GET /tasks/:id` - Get specific task
-- `POST /tasks` - Create new task
-- `PUT /tasks/:id` - Update task
-- `DELETE /tasks/:id` - Delete task
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /tasks | List all tasks |
+| GET | /tasks/:id | Get task by ID |
+| POST | /tasks | Create new task |
+| PUT | /tasks/:id | Update task |
+| DELETE | /tasks/:id | Delete task |
+| POST | /tasks/:id/delegate | Trigger delegation |
 
 ### Agents
-- `GET /agents` - Get all agents
-- `GET /agents/:id` - Get specific agent
-- `POST /agents/register` - Register new agent
-- `PUT /agents/:id` - Update agent
-- `DELETE /agents/:id` - Delete agent
-- `GET /agents/:id/status` - Get agent status
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /agents | List all agents |
+| GET | /agents/:id | Get agent by ID |
+| POST | /agents/register | Register new agent |
+| POST | /agents/bootstrap | Bootstrap default agents |
+| PUT | /agents/:id | Update agent |
+| DELETE | /agents/:id | Delete agent |
 
-## Plugin Development
+### Delegations
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /delegations | List all delegation runs |
+| GET | /delegations/:taskId | Get delegations for task |
+| POST | /delegations/:taskId/clarify | Submit clarification answers |
+| GET | /delegate/:taskId/delegations/stream | SSE stream for task |
 
-### Creating a Plugin
+### Other Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | /suggestions | Manage suggestions |
+| GET/POST | /templates | Manage templates |
+| GET/PUT | /profile | Get/update profile |
+| GET/POST | /chat | Chat with history |
+| GET/POST | /workflows | Manage workflows |
 
-1. Create a new file in the `plugins` directory
-2. Extend the `BasePlugin` class
-3. Implement the required methods
+## Database Schema
 
-```javascript
-const BasePlugin = require('../plugins/BasePlugin');
+SQLite database with the following models:
 
-class MyPlugin extends BasePlugin {
-  async onInitialize() {
-    // Plugin initialization logic
-  }
-
-  async onCleanup() {
-    // Plugin cleanup logic
-  }
-
-  // Custom methods
-  async myCustomAction() {
-    // Your plugin logic
-  }
-}
-
-module.exports = MyPlugin;
-```
-
-## Database
-
-The Master Agent uses SQLite for data persistence. The database schema includes:
-
-- **Tasks**: Task management data
-- **Agents**: Agent registration and configuration
+- **Task**: id, title, description, status, priority, createdAt, updatedAt
+- **Agent**: id, name, displayName, description, capabilities, models, status
+- **DelegationRun**: id, taskId, status, events, result, createdAt, updatedAt
+- **ChatLog**: id, role, content, model, createdAt
+- **PlanLog**: id, prompt, response, model, createdAt
+- **MasterProfile**: id, name, displayName, persona, traits, variables
+- **Template**: id, title, description, category, agents, inputs, steps
+- **Suggestion**: id, title, body, agentName, confidence, score, status
+- **WorkflowRun**: id, workflowId, status, result, createdAt
 
 ## Configuration
 
-Configuration can be set via environment variables or the `.env` file:
+Environment variables:
 
-- `PORT`: Server port (default: 3000)
-- `NODE_ENV`: Environment (development/production)
-- `LOG_LEVEL`: Logging level (default: info)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| PORT | 3001 | Server port |
+| CLIENT_PORT | 3002 | Dashboard port |
+| DELEGATE_URL | http://localhost:7788/delegate | Delegation endpoint |
+| AUTO_DELEGATE_ENABLED | true | Enable auto-delegation |
+| DELEGATION_INTERVAL_MS | 300000 | Sweep interval (5 min) |
+| RECENT_DELEGATION_AGE_MS | 300000 | Skip recent tasks |
 
-## Contributing
+## Task Delegation Flow
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+1. User creates task → status: pending
+2. Scheduler sweeps every `DELEGATION_INTERVAL_MS`
+3. For pending tasks, POST to agent-service `/delegate`
+4. Task status → in_progress → completed/failed based on result
+5. If needs_clarification, status → review, show modal in UI
+6. User answers clarification → delegation resumes
 
-## License
+## Dashboard
 
-MIT License
+React-based dashboard at http://localhost:3002 with:
+
+- Task list with filters and search
+- Agent management
+- Chat panel for plan/codegen
+- Delegation timeline with SSE streaming
+- Settings for profile and model preferences
+- Template management
+- Suggestions display

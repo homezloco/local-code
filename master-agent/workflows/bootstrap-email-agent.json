@@ -1,0 +1,20 @@
+{
+  "name": "bootstrap-email-agent",
+  "description": "Warm up email agent, check inbox health, summarize unread.",
+  "agent": "email-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Check inbox health",
+      "description": "Run IMAP/connectivity and quota check.",
+      "priority": "medium"
+    },
+    {
+      "title": "Summarize unread (24h)",
+      "description": "Summarize unread messages from the last 24 hours.",
+      "priority": "medium"
+    }
+  ]
+}

@@ -23,6 +23,7 @@
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
+    "node-fetch": "^3.3.2",
     "nodemailer": "^6.9.7",
     "nodemon": "^3.1.11",
     "sequelize": "^6.37.7",

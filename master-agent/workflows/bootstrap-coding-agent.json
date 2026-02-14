@@ -1,0 +1,20 @@
+{
+  "name": "bootstrap-coding-agent",
+  "description": "Prime coding-agent with codebase awareness and health checks.",
+  "agent": "coding-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Index codebase",
+      "description": "Refresh codebase context and verify RAG connectivity.",
+      "priority": "medium"
+    },
+    {
+      "title": "List open issues",
+      "description": "Summarize current tasks/issues from backlog or TODOs for today.",
+      "priority": "medium"
+    }
+  ]
+}

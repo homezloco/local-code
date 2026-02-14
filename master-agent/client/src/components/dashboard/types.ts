@@ -11,6 +11,26 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface Suggestion {
+  id: string;
+  title: string;
+  body: string;
+  agentName: string;
+  confidence?: number | null;
+  score?: number | null;
+  status:
+    | 'new'
+    | 'merged'
+    | 'approved'
+    | 'rejected'
+    | 'auto_answered'
+    | 'auto_delegated'
+    | 'needs_review';
+  createdAt: string;
+  updatedAt: string;
+  metadata?: any;
+}
+
 export interface TaskDelegation {
   id: string;
   taskId: string;
@@ -88,6 +108,26 @@ export type WidgetZones = {
 };
 
 export type ZoneName = 'header' | 'main' | 'secondary' | 'footer';
+
+export interface StartupWorkflow {
+  name: string;
+  description: string;
+  agent: string;
+  auto: boolean;
+  stepCount: number;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowName: string;
+  status: 'pending' | 'completed' | 'failed';
+  error?: string | null;
+  metadata?: any;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface AgentSuggestion {
   id: string;

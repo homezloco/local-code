@@ -1,0 +1,20 @@
+{
+  "name": "bootstrap-time-management-agent",
+  "description": "Prime time-management-agent with schedule and priority pass.",
+  "agent": "time-management-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Calendar scan",
+      "description": "Review today’s calendar for conflicts and gaps; propose focus blocks.",
+      "priority": "medium"
+    },
+    {
+      "title": "Task prioritization",
+      "description": "Propose a priority-ordered list of top tasks for today with time estimates.",
+      "priority": "medium"
+    }
+  ]
+}

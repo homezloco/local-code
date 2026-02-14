@@ -7,6 +7,7 @@ const DelegationRun = require('../models/DelegationRun');
 const MasterProfile = require('../models/MasterProfile');
 const ChatLog = require('../models/ChatLog');
 const PlanLog = require('../models/PlanLog');
+const WorkflowRun = require('../models/WorkflowRun');
 
 db.models.Task = Task;
 db.models.Agent = Agent;
@@ -16,14 +17,27 @@ db.models.DelegationRun = DelegationRun;
 db.models.MasterProfile = MasterProfile;
 db.models.ChatLog = ChatLog;
 db.models.PlanLog = PlanLog;
+db.models.WorkflowRun = WorkflowRun;
 
 async function initDatabase() {
   try {
-    // allow additive columns (e.g., iterations/events on task delegations) without destructive drops
-    await db.sequelize.sync({ force: false, alter: true });
+    // Allow configurable sync strategy to avoid noisy backup/restore in dev
+    // DB_SYNC_STRATEGY: 'alter' (default for Postgres), 'sync' (no alter), 'none'
+    // For SQLite, default to 'sync' to prevent repeated backup/drop cycles when enums/JSON trigger ALTER churn.
+    const defaultStrategy = db.sequelize.getDialect() === 'sqlite' ? 'sync' : 'alter';
+    const strategy = (process.env.DB_SYNC_STRATEGY || defaultStrategy).toLowerCase();
 
-    console.log('Database synchronized successfully');
-    
+    if (strategy === 'none') {
+      console.log('Database sync skipped (DB_SYNC_STRATEGY=none)');
+    } else if (strategy === 'sync') {
+      await db.sequelize.sync({ force: false, alter: false });
+      console.log('Database synchronized successfully (sync)');
+    } else {
+      // default: alter to apply additive changes without destructive drops
+      await db.sequelize.sync({ force: false, alter: true });
+      console.log('Database synchronized successfully (alter)');
+    }
+
     // Seed master profile if missing
     const existingProfile = await MasterProfile.findOne();
     if (!existingProfile) {

@@ -1,8 +1,16 @@
-const fetch = require('node-fetch');
+const fetch = globalThis.fetch || ((...args) => import('node-fetch').then(({ default: f }) => f(...args)));
 const Task = require('../models/Task');
 const Agent = require('../models/Agent');
 const TaskDelegation = require('../models/TaskDelegation');
 const logger = require('../config/logger');
+
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch (_err) {
+    return null;
+  }
+}
 
 const AGENT_SERVICE_URL = process.env.AGENT_SERVICE_URL || 'http://127.0.0.1:7788';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
@@ -30,7 +38,61 @@ const AGENT_CAPABILITIES = {
     keywords: ['schedule', 'calendar', 'reminder', 'deadline', 'priority', 'time block', 'meeting', 'appointment', 'todo', 'plan day', 'weekly review', 'focus'],
     description: 'Handles time management: scheduling, reminders, prioritization, calendar management'
   }
+
 };
+
+/**
+ * Execute a task with a synchronous loop (Thought/Action/Observation) and return the delegation record.
+ * This reuses the same delegation plumbing but waits for completion so callers can surface iterations/events immediately.
+ */
+async function executeTaskLoop(taskId, options = {}) {
+  const task = await Task.findByPk(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const forceAgent = options.agentName;
+  const classification = forceAgent
+    ? { agentName: forceAgent, intent: 'manual-assignment', confidence: 1.0 }
+    : await classifyTask(task.title, task.description);
+
+  let agent = await Agent.findOne({ where: { name: classification.agentName } });
+  if (!agent && classification.agentName !== 'general') {
+    const capConfig = AGENT_CAPABILITIES[classification.agentName];
+    agent = await Agent.create({
+      name: classification.agentName,
+      displayName: classification.agentName
+        .split('-')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' '),
+      description: capConfig?.description || `Specialized ${classification.agentName} agent`,
+      capabilities: capConfig?.keywords || [],
+      models: [CLASSIFIER_MODEL],
+      endpoints: { delegate: '/tasks/delegate', status: '/agents/status' }
+    });
+  }
+
+  const delegation = await TaskDelegation.create({
+    taskId: task.id,
+    agentName: classification.agentName,
+    status: 'queued',
+    intent: classification.intent,
+    confidence: classification.confidence,
+    input: {
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      metadata: task.metadata
+    },
+    model: options.model || CLASSIFIER_MODEL,
+    provider: options.provider || 'ollama'
+  });
+
+  await task.update({ status: 'delegated', assignedTo: classification.agentName });
+
+  // Run the loop and wait for completion to return full details
+  await executeDelegate(delegation.id, task, classification, options);
+  const updated = await TaskDelegation.findByPk(delegation.id);
+  return updated;
+}
 
 /**
  * Classify task intent using keyword matching as primary, LLM as fallback.
@@ -110,6 +172,18 @@ Respond with ONLY the agent name (e.g., "coding-agent"). Nothing else.`;
 
   // Phase 3: default to general/coding-agent as most versatile
   return { agentName: 'coding-agent', intent: 'default-fallback', confidence: 0.3 };
+}
+
+function stripEmbeddings(ragContext) {
+  if (!Array.isArray(ragContext)) return ragContext;
+  return ragContext.map((item) => {
+    if (item && typeof item === 'object') {
+      // Remove large embedding blobs before persisting/displaying
+      const { embedding, ...rest } = item;
+      return rest;
+    }
+    return item;
+  });
 }
 
 /**
@@ -229,21 +303,34 @@ async function executeDelegate(delegationId, task, classification, options = {})
     const resultPlan = data.finalAnswer || data.plan || data.code || data.result || '';
     const loopIterations = Array.isArray(data.iterations) ? data.iterations : [];
     const loopEvents = Array.isArray(data.events) ? data.events : [];
+    const questions = Array.isArray(data.questions)
+      ? data.questions
+      : data.questions
+        ? [data.questions]
+        : data.observation && typeof data.observation === 'string'
+          ? [data.observation]
+          : null;
+    const needsClarification = data.status === 'needs_clarification' || (questions && questions.length > 0);
+
+    const cleanedContext = stripEmbeddings(data.context?.ragContext || data.context?.results || data.context || []);
+
     const result = {
       plan: resultPlan || JSON.stringify(data),
       model: data.modelTried,
       fallback: data.fallbackTried,
       provider: data.provider,
-      context: data.context,
-      status: data.status,
-      questions: data.questions || data.observation || null
+      context: {
+        ...data.context,
+        ragContext: cleanedContext
+      },
+      status: needsClarification ? 'needs_clarification' : data.status,
+      questions
     };
 
     // merge remote iterations/events with local start event
     events.push(...loopEvents.map((e) => ({ ...e }))); // shallow copy
     iterations.push(...loopIterations.map((it) => ({ ...it })));
 
-    const needsClarification = data.status === 'needs_clarification';
     const needsReview = needsClarification || classification.confidence < 0.7 || task.priority === 'urgent';
     const finalStatus = needsClarification ? 'review' : needsReview ? 'review' : 'completed';
 
@@ -269,6 +356,10 @@ async function executeDelegate(delegationId, task, classification, options = {})
         }
       }
     });
+
+    if (needsClarification) {
+      events.push({ event: 'needs_clarification', data: { questions }, ts: Date.now() });
+    }
 
     logger.info(`Delegation ${delegationId} completed with status: ${finalStatus}`);
   } catch (err) {
@@ -387,12 +478,249 @@ async function rejectDelegation(delegationId, reason) {
   return delegation;
 }
 
+/**
+ * Multi-Agent Collaboration: Sequential Handoff
+ * Executes multiple agents in sequence, passing results from each to the next.
+ */
+async function delegateToMultipleAgents(taskId, agentNames, options = {}) {
+  const task = await Task.findByPk(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const events = [];
+  const allIterations = [];
+  const collaborationResults = [];
+
+  for (let i = 0; i < agentNames.length; i++) {
+    const agentName = agentNames[i];
+    const isLast = i === agentNames.length - 1;
+
+    logger.info(`Multi-agent: executing ${agentName} (${i + 1}/${agentNames.length})`);
+
+    // Create delegation record for this agent
+    const delegation = await TaskDelegation.create({
+      taskId: task.id,
+      agentName,
+      status: 'queued',
+      intent: `multi-agent-handoff-${i + 1}`,
+      confidence: 1.0,
+      input: {
+        title: task.title,
+        description: task.description,
+        priority: task.priority,
+        metadata: {
+          ...task.metadata,
+          handoff: {
+            fromPrevious: i > 0 ? collaborationResults[i - 1] : null,
+            step: i + 1,
+            total: agentNames.length
+          }
+        }
+      },
+      model: options.model || CLASSIFIER_MODEL,
+      provider: options.provider || 'ollama'
+    });
+
+    // Update task status
+    await task.update({ status: 'in_progress', assignedTo: agentName });
+
+    try {
+      // Build prompt with previous results if not first agent
+      let agentPrompt = buildAgentPrompt(agentName, task);
+      if (i > 0 && collaborationResults[i - 1]) {
+        agentPrompt = `Previous agent (${agentNames[i - 1]}) completed:\n${JSON.stringify(collaborationResults[i - 1], null, 2)}\n\n---\n\n${agentPrompt}`;
+      }
+
+      const autonomous = options.autonomous !== undefined ? options.autonomous : true;
+      const resp = await fetch(`${AGENT_SERVICE_URL}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: agentPrompt,
+          context: { useRAG: true, k: 8 },
+          autonomous,
+          model: options.model || CLASSIFIER_MODEL,
+          provider: options.provider,
+          apiKey: options.apiKey,
+          endpoint: options.endpoint
+        })
+      });
+
+      if (!resp.ok) {
+        throw new Error(`Agent service error ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      const result = {
+        agentName,
+        step: i + 1,
+        finalAnswer: data.finalAnswer,
+        iterations: data.iterations || [],
+        events: data.events || [],
+        status: data.status
+      };
+
+      collaborationResults.push(result);
+      allIterations.push(...(data.iterations || []));
+      events.push({ event: 'handoff', data: result, ts: Date.now() });
+
+      // Check for clarification needs - pause collaboration
+      if (data.status === 'needs_clarification' || data.questions) {
+        await delegation.update({
+          status: 'review',
+          result,
+          iterations: data.iterations,
+          events,
+          completedAt: new Date()
+        });
+        await task.update({
+          status: 'pending',
+          metadata: {
+            ...task.metadata,
+            handoff: {
+              ...task.metadata?.handoff,
+              pausedAtStep: i + 1,
+              questions: data.questions
+            }
+          }
+        });
+        return {
+          status: 'needs_clarification',
+          partialResults: collaborationResults,
+          currentStep: i + 1,
+          questions: data.questions
+        };
+      }
+
+      await delegation.update({
+        status: 'completed',
+        result,
+        iterations: data.iterations,
+        events,
+        completedAt: new Date()
+      });
+
+    } catch (err) {
+      const errorMsg = err?.message || String(err);
+      logger.error(`Multi-agent step ${i + 1} failed: ${errorMsg}`);
+
+      await delegation.update({
+        status: 'failed',
+        error: errorMsg,
+        events,
+        completedAt: new Date()
+      });
+
+      // Decide whether to continue or stop on error
+      if (!options.continueOnError) {
+        await task.update({
+          status: 'failed',
+          metadata: {
+            ...task.metadata,
+            handoff: {
+              failedAtStep: i + 1,
+              error: errorMsg,
+              partialResults: collaborationResults
+            }
+          }
+        });
+        throw new Error(`Multi-agent collaboration failed at step ${i + 1}: ${errorMsg}`);
+      }
+    }
+  }
+
+  // All agents completed
+  await task.update({
+    status: 'completed',
+    assignedTo: agentNames.join(' → '),
+    metadata: {
+      ...task.metadata,
+      handoff: {
+        completed: true,
+        agents: agentNames,
+        finalResult: collaborationResults[collaborationResults.length - 1]
+      }
+    }
+  });
+
+  return {
+    status: 'completed',
+    results: collaborationResults,
+    allIterations,
+    finalResult: collaborationResults[collaborationResults.length - 1]
+  };
+}
+
+/**
+ * Parallel Agent Execution
+ * Executes multiple agents in parallel and aggregates results.
+ */
+async function delegateToAgentsParallel(taskId, agentNames, options = {}) {
+  const task = await Task.findByPk(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const agentPromises = agentNames.map(async (agentName) => {
+    const delegation = await TaskDelegation.create({
+      taskId: task.id,
+      agentName,
+      status: 'queued',
+      intent: 'parallel-execution',
+      confidence: 1.0,
+      input: { title: task.title, description: task.description, priority: task.priority },
+      model: options.model || CLASSIFIER_MODEL,
+      provider: options.provider || 'ollama'
+    });
+
+    try {
+      const agentPrompt = buildAgentPrompt(agentName, task);
+      const resp = await fetch(`${AGENT_SERVICE_URL}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: agentPrompt,
+          context: { useRAG: options.useRAG !== false ? { useRAG: true, k: 8 } : {} },
+          autonomous: options.autonomous !== undefined ? options.autonomous : true,
+          model: options.model || CLASSIFIER_MODEL,
+          provider: options.provider,
+          apiKey: options.apiKey,
+          endpoint: options.endpoint
+        })
+      });
+
+      if (!resp.ok) throw new Error(`Agent service error ${resp.status}`);
+      const data = await resp.json();
+
+      await delegation.update({ status: 'completed', result: data, completedAt: new Date() });
+      return { agentName, status: 'completed', result: data };
+    } catch (err) {
+      const errorMsg = err?.message || String(err);
+      await delegation.update({ status: 'failed', error: errorMsg, completedAt: new Date() });
+      return { agentName, status: 'failed', error: errorMsg };
+    }
+  });
+
+  const results = await Promise.all(agentPromises);
+
+  await task.update({
+    status: 'completed',
+    assignedTo: `parallel:${agentNames.join(',')}`,
+    metadata: {
+      ...task.metadata,
+      parallelExecution: { agents: agentNames, results }
+    }
+  });
+
+  return { status: 'completed', results };
+}
+
 module.exports = {
   classifyTask,
   delegateTask,
+  executeTaskLoop,
   getDelegationHistory,
   getActiveDelegations,
   approveDelegation,
   rejectDelegation,
+  delegateToMultipleAgents,
+  delegateToAgentsParallel,
   AGENT_CAPABILITIES
 };

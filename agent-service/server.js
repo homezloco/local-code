@@ -1,6 +1,11 @@
 import express from 'express';
 import cors from 'cors';
-import fetch from 'node-fetch';
+
+// Universal fetch shim to support Node versions without global fetch and to ensure the value is a function
+const fetch =
+  typeof globalThis.fetch === 'function'
+    ? globalThis.fetch
+    : (url, options) => import('node-fetch').then(({ default: fetchFn }) => fetchFn(url, options));
 
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -8,7 +13,16 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const safeJsonParse = (text) => {
+  try {
+    return JSON.parse(text);
+  } catch (_err) {
+    return null;
+  }
+};
+
 const app = express();
+
 app.use(express.json());
 
 const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 'http://localhost:3002,http://127.0.0.1:3002';
@@ -28,11 +42,11 @@ app.use(
 
 const PORT = process.env.PORT || 7788;
 const RAG_URL = process.env.RAG_URL || 'http://127.0.0.1:7777';
-const PLANNER_MODEL = process.env.PLANNER_MODEL || 'llama3';
+const PLANNER_MODEL = process.env.PLANNER_MODEL || 'gemma3:1b';
 const CODER_MODEL = process.env.CODER_MODEL || 'qwen2.5-coder:14b';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 
-const FALLBACK_PLANNER_MODEL = process.env.FALLBACK_PLANNER_MODEL || 'llama3.1:8b';
+const FALLBACK_PLANNER_MODEL = process.env.FALLBACK_PLANNER_MODEL || 'codellama:instruct';
 const FALLBACK_CODER_MODEL = process.env.FALLBACK_CODER_MODEL || 'codellama:7b-instruct-q4_0';
 
 const OLLAMA_RETRIES = Number(process.env.OLLAMA_RETRIES || 0);

@@ -1,4 +1,7 @@
-const fetch = require('node-fetch');
+// Universal fetch shim to support Node without global fetch and ESM-only node-fetch
+const fetch =
+  globalThis.fetch ||
+  ((...args) => import('node-fetch').then(({ default: fetchFn }) => fetchFn(...args)));
 const AgentSuggestion = require('../models/AgentSuggestion');
 const Agent = require('../models/Agent');
 const { buildAgentContext } = require('./AgentDataAccess');

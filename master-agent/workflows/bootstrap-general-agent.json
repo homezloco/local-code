@@ -1,0 +1,20 @@
+{
+  "name": "bootstrap-general-agent",
+  "description": "Prime general agent with overall system status and highlights.",
+  "agent": "coding-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "System health summary",
+      "description": "Summarize service health (agent-service, shared-rag) and recent errors if any.",
+      "priority": "medium"
+    },
+    {
+      "title": "Repo TODO sweep",
+      "description": "Scan repo TODOs/notes to propose 3 suggested tasks for today.",
+      "priority": "medium"
+    }
+  ]
+}

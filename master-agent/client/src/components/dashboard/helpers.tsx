@@ -78,10 +78,10 @@ export const renderMarkdown = (text: string): React.ReactElement => {
   return <div className="prose max-w-none text-gray-900" dangerouslySetInnerHTML={{ __html: withBreaks }} />;
 };
 
-export const Skeleton: React.FC<{ rows?: number }> = ({ rows = 3 }) => (
-  <div className="space-y-3">
+export const Skeleton: React.FC<{ className?: string; rows?: number }> = ({ className = '', rows = 1 }) => (
+  <div className="space-y-2">
     {Array.from({ length: rows }).map((_, idx) => (
-      <div key={idx} className="h-4 rounded bg-slate-800/70 animate-pulse" />
+      <div key={idx} className={`animate-pulse rounded bg-slate-800/70 ${className || 'h-4 w-full'}`} />
     ))}
   </div>
 );

@@ -42,19 +42,36 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
   const [autoFlags, setAutoFlags] = useState<Record<string, boolean>>({});
   const [fullResultModal, setFullResultModal] = useState<FullResultModal | null>(null);
 
+  const formatResult = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const getResultPreview = (value: unknown, expanded: boolean): string => {
+    const formatted = formatResult(value);
+    if (expanded) return formatted;
+    const limit = 400;
+    return formatted.length > limit ? `${formatted.slice(0, limit)} …` : formatted;
+  };
+
   const toggleResult = (id: string) => {
     setExpandedResults((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   const openFullResult = useCallback(async (task: Task, fallbackText: string) => {
-    setFullResultModal({ taskTitle: task.title, result: fallbackText, loading: true });
+    setFullResultModal({ taskTitle: task.title, result: formatResult(fallbackText), loading: true });
     try {
       const resp = await fetch(`${API}/api/delegate/${task.id}/delegations`);
       if (resp.ok) {
         const delegations = await resp.json();
         const latest = delegations?.[0];
         if (latest?.result) {
-          setFullResultModal({ taskTitle: task.title, result: latest.result, loading: false });
+          setFullResultModal({ taskTitle: task.title, result: formatResult(latest.result), loading: false });
           return;
         }
       }
@@ -76,7 +93,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
       const status = task.status as string;
       const delegation = task.metadata?.lastDelegation as {
         agentName?: string;
-        result?: string;
+        result?: unknown;
         completedAt?: string;
         needsClarification?: boolean;
       } | undefined;
@@ -87,13 +104,14 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
       return (
         <div
           key={task.id}
-          className={`border-l-4 rounded-lg pl-4 py-3 transition-colors ${
+          className={`border-l-4 rounded-lg pl-4 py-3 transition-colors cursor-pointer ${
             status === 'completed' ? 'border-green-500 bg-green-900/10' :
             status === 'review' ? 'border-yellow-500 bg-yellow-900/10' :
             status === 'failed' ? 'border-red-500 bg-red-900/10' :
             isDelegated ? 'border-purple-500 bg-purple-900/10' :
             'border-slate-600 bg-slate-800/40'
           } hover:bg-slate-700/30`}
+          onClick={() => openFullResult(task, formatResult(delegation?.result ?? task.description ?? ''))}
         >
           <div className="flex justify-between items-start">
             <div className="flex-1 min-w-0">
@@ -106,7 +124,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                   </span>
                 )}
               </h3>
-              <p className="text-sm text-gray-300 mt-1">{task.description}</p>
+              <p className="text-sm text-gray-300 mt-1 break-words">{task.description}</p>
               <div className="flex items-center mt-2 space-x-2 flex-wrap gap-y-1">
                 <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(task.status)}`}>
                   {task.status}
@@ -126,22 +144,28 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                 )}
               </div>
 
-              {status === 'completed' && delegation?.result && (
+              {status === 'completed' && delegation?.result !== undefined && delegation?.result !== null && (
                 <div className="mt-2 p-2 rounded-md bg-green-900/30 border border-green-800">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-xs font-medium text-green-300">✅ Agent Result:</p>
                     <div className="flex items-center gap-2">
-                      <CopyButton text={delegation.result} />
+                      <CopyButton text={formatResult(delegation.result)} />
                       <button
                         type="button"
                         className="text-xs text-green-400 hover:text-green-300 underline"
-                        onClick={() => toggleResult(task.id)}
+                        onClick={(e) => { e.stopPropagation(); toggleResult(task.id); }}
                       >
                         {expandedResults[task.id] ? 'Show Less' : 'Show Full'}
                       </button>
                     </div>
                   </div>
-                  <pre className={`text-xs text-green-200 whitespace-pre-wrap font-sans ${expandedResults[task.id] ? 'max-h-[80vh] overflow-y-auto' : 'line-clamp-4'}`}>{delegation.result}</pre>
+                  <pre
+                    className={`text-xs text-green-200 whitespace-pre-wrap break-words break-all font-sans w-full max-w-full overflow-hidden ${
+                      expandedResults[task.id] ? 'max-h-[80vh] overflow-y-auto' : 'max-h-32'
+                    }`}
+                  >
+                    {getResultPreview(delegation.result, Boolean(expandedResults[task.id]))}
+                  </pre>
                   <div className="flex items-center justify-between mt-1">
                     {delegation.completedAt && (
                       <p className="text-xs text-green-400">Completed {new Date(delegation.completedAt).toLocaleString()}</p>
@@ -149,7 +173,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                     <button
                       type="button"
                       className="text-xs px-2 py-0.5 rounded bg-green-800 hover:bg-green-700 text-green-200 hover:text-white transition-colors"
-                      onClick={() => openFullResult(task, delegation.result ?? '')}
+                      onClick={(e) => { e.stopPropagation(); openFullResult(task, formatResult(delegation.result ?? '')); }}
                     >
                       🔍 View Full Result
                     </button>
@@ -157,27 +181,33 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                 </div>
               )}
 
-              {status === 'review' && delegation?.result && (
+              {status === 'review' && delegation?.result !== undefined && delegation?.result !== null && (
                 <div className="mt-2 p-2 rounded-md bg-yellow-900/30 border border-yellow-800">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-xs font-medium text-yellow-300">👀 Needs Review:</p>
                     <div className="flex items-center gap-2">
-                      <CopyButton text={delegation.result} />
+                      <CopyButton text={formatResult(delegation.result)} />
                       <button
                         type="button"
                         className="text-xs text-yellow-400 hover:text-yellow-300 underline"
-                        onClick={() => toggleResult(task.id)}
+                        onClick={(e) => { e.stopPropagation(); toggleResult(task.id); }}
                       >
                         {expandedResults[task.id] ? 'Show Less' : 'Show Full'}
                       </button>
                     </div>
                   </div>
-                  <pre className={`text-xs text-yellow-200 whitespace-pre-wrap font-sans ${expandedResults[task.id] ? 'max-h-[80vh] overflow-y-auto' : 'line-clamp-4'}`}>{delegation.result}</pre>
+                  <pre
+                    className={`text-xs text-yellow-200 whitespace-pre-wrap break-words break-all font-sans w-full max-w-full overflow-hidden ${
+                      expandedResults[task.id] ? 'max-h-[80vh] overflow-y-auto' : 'max-h-32'
+                    }`}
+                  >
+                    {getResultPreview(delegation.result, Boolean(expandedResults[task.id]))}
+                  </pre>
                   <div className="flex justify-end mt-1">
                     <button
                       type="button"
                       className="text-xs px-2 py-0.5 rounded bg-yellow-800 hover:bg-yellow-700 text-yellow-200 hover:text-white transition-colors"
-                      onClick={() => openFullResult(task, delegation.result ?? '')}
+                      onClick={() => openFullResult(task, formatResult(delegation.result ?? ''))}
                     >
                       🔍 View Full Result
                     </button>
@@ -194,18 +224,18 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                       <button
                         type="button"
                         className="text-xs text-red-400 hover:text-red-300 underline"
-                        onClick={() => toggleResult(task.id)}
+                        onClick={(e) => { e.stopPropagation(); toggleResult(task.id); }}
                       >
                         {expandedResults[task.id] ? 'Show Less' : 'Show Full'}
                       </button>
                     </div>
                   </div>
-                  <pre className={`text-xs text-red-200 whitespace-pre-wrap font-sans ${expandedResults[task.id] ? 'max-h-[80vh] overflow-y-auto' : 'line-clamp-4'}`}>{lastError.error}</pre>
+                  <pre className={`text-xs text-red-200 whitespace-pre-wrap font-sans break-words ${expandedResults[task.id] ? 'max-h-[80vh] overflow-y-auto' : 'line-clamp-4'}`}>{lastError.error}</pre>
                   <div className="flex justify-end mt-1">
                     <button
                       type="button"
                       className="text-xs px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-red-200 hover:text-white transition-colors"
-                      onClick={() => openFullResult(task, lastError.error || '')}
+                      onClick={(e) => { e.stopPropagation(); openFullResult(task, lastError.error || ''); }}
                     >
                       🔍 View Full Result
                     </button>
@@ -221,7 +251,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                 <button
                   type="button"
                   className="text-blue-400 hover:text-blue-300 text-sm"
-                  onClick={() => openTaskModalForEdit(task)}
+                  onClick={(e) => { e.stopPropagation(); openTaskModalForEdit(task); }}
                 >
                   Edit
                 </button>
@@ -241,14 +271,14 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                     <button
                       type="button"
                       className="text-indigo-400 hover:text-indigo-300 text-sm"
-                      onClick={() => runPlan(task)}
+                      onClick={(e) => { e.stopPropagation(); runPlan(task); }}
                     >
                       Plan
                     </button>
                     <button
                       type="button"
                       className="text-amber-400 hover:text-amber-300 text-sm"
-                      onClick={() => runCodegen(task)}
+                      onClick={(e) => { e.stopPropagation(); runCodegen(task); }}
                     >
                       Codegen
                     </button>
@@ -258,7 +288,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                   <button
                     type="button"
                     className="text-emerald-400 hover:text-emerald-300 text-sm font-semibold"
-                    onClick={() => onViewCode(task)}
+                    onClick={(e) => { e.stopPropagation(); onViewCode(task); }}
                   >
                     💻 View Code
                   </button>
@@ -266,7 +296,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                 <button
                   type="button"
                   className="text-purple-400 hover:text-purple-300 text-sm font-semibold"
-                  onClick={() => onDelegate(task, { autonomous: !!autoFlags[task.id] })}
+                  onClick={(e) => { e.stopPropagation(); onDelegate(task, { autonomous: !!autoFlags[task.id] }); }}
                   disabled={actionLoading || isDelegated}
                 >
                   {isDelegated ? '⏳ Working...' : isFinished ? '🔄 Re-delegate' : autoFlags[task.id] ? '🤖 Auto Delegate' : '🤖 Delegate'}

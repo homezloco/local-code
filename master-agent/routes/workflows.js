@@ -1,5 +1,8 @@
 const express = require('express');
 const Template = require('../models/Template');
+const WorkflowRun = require('../models/WorkflowRun');
+const { listWorkflowFiles, updateWorkflowAuto, saveWorkflowFile, validateWorkflow, readWorkflowFile } = require('../services/startupWorkflows');
+const { delegateTask } = require('../services/DelegationEngine');
 
 const router = express.Router();
 
@@ -87,6 +90,101 @@ router.get('/', async (_req, res) => {
     res.json({ workflows: summary });
   } catch (err) {
     res.status(500).json({ error: err?.message || 'Failed to list workflows' });
+  }
+});
+
+// List workflow files (startup workflows)
+router.get('/files', async (_req, res) => {
+  try {
+    const files = await listWorkflowFiles();
+    res.json({ workflows: files });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Failed to list workflow files' });
+  }
+});
+
+// Toggle auto flag for a workflow file
+router.post('/files/:name/auto', async (req, res) => {
+  try {
+    const { auto } = req.body || {};
+    await updateWorkflowAuto(req.params.name, Boolean(auto));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Failed to update workflow auto flag' });
+  }
+});
+
+// Get a workflow file
+router.get('/files/:name', async (req, res) => {
+  try {
+    const wf = await readWorkflowFile(req.params.name);
+    res.json({ workflow: wf });
+  } catch (err) {
+    res.status(404).json({ error: err?.message || 'Workflow not found' });
+  }
+});
+
+// Update/save a workflow file
+router.put('/files/:name', async (req, res) => {
+  try {
+    const wf = req.body;
+    const validationError = validateWorkflow(wf);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+    await saveWorkflowFile(wf);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Failed to save workflow' });
+  }
+});
+
+// Suggest a new workflow (prototype): calls master agent to draft JSON; requires approval to save
+router.post('/suggest', async (req, res) => {
+  try {
+    const { topic = 'general startup workflow', prompt, agent = 'master-agent', approve = false, workflow: providedWorkflow } = req.body || {};
+
+    // If caller provided a workflow and wants approval, validate and save directly
+    if (approve && providedWorkflow) {
+      const validationError = validateWorkflow(providedWorkflow);
+      if (validationError) {
+        return res.status(400).json({ error: validationError, valid: false });
+      }
+      await saveWorkflowFile(providedWorkflow);
+      return res.json({ proposal: providedWorkflow, valid: true, saved: true });
+    }
+
+    const effectivePrompt = prompt || `Propose a startup workflow in JSON with fields: name, description, agent, auto (bool), priority (low|medium|high|urgent), schedule ('startup'), steps (array of {title, description}). Topic: ${topic}. Keep steps <=4, concise titles. Respond with JSON only.`;
+    const fakeTaskId = `workflow-suggest-${Date.now()}`;
+    const result = await delegateTask(fakeTaskId, { agentName: agent, autonomous: true, overridePrompt: effectivePrompt });
+    const text = typeof result === 'string' ? result : JSON.stringify(result);
+    let parsed = null;
+    try {
+      parsed = typeof result === 'object' && result?.result ? result.result : JSON.parse(text);
+    } catch {
+      // fall back to raw
+    }
+    const workflow = parsed && parsed.name ? parsed : null;
+    const validationError = workflow ? validateWorkflow(workflow) : 'invalid JSON result';
+    const response = { proposal: workflow || result, valid: !validationError, validationError };
+    if (approve && workflow && !validationError) {
+      await saveWorkflowFile(workflow);
+      response.saved = true;
+    }
+    res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Failed to suggest workflow' });
+  }
+});
+
+// List recent workflow runs (startup activity)
+router.get('/runs', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const runs = await WorkflowRun.findAll({ order: [['createdAt', 'DESC']], limit });
+    res.json({ runs });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Failed to list workflow runs' });
   }
 });
 

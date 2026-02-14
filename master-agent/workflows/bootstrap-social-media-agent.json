@@ -1,0 +1,20 @@
+{
+  "name": "bootstrap-social-media-agent",
+  "description": "Prime social-media-agent with content plan and monitoring.",
+  "agent": "social-media-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Channel health check",
+      "description": "Review recent performance (reach/engagement) for active channels.",
+      "priority": "medium"
+    },
+    {
+      "title": "Content ideas",
+      "description": "Propose 3 post ideas for today with platform suggestions.",
+      "priority": "medium"
+    }
+  ]
+}
