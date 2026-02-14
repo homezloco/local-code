@@ -615,7 +615,7 @@ export default function Dashboard(): JSX.Element {
     try {
       const res = await axios.get(`${apiBase}/api/delegate/${taskId}/delegations`);
 
-      const delegations = res.data || [];
+      const delegations = res.data?.data || res.data || [];
       setDelegationLogs((prev) => ({
         ...prev,
         [taskId]: (Array.isArray(delegations) ? delegations : []).map((d: any) => ({
@@ -720,6 +720,17 @@ export default function Dashboard(): JSX.Element {
 
   const pushResultHistory = (payload: LocalResultPayload) => {
     setResultHistory((prev) => [{ ...payload, at: payload.at || Date.now() }, ...prev].slice(0, 50));
+  };
+
+  const handleChatResult = ({ text, meta, mode }: { text: string; meta?: Record<string, any>; mode: 'plan' | 'codegen' }) => {
+    const payload = {
+      title: mode === 'codegen' ? 'Codegen result' : 'Plan result',
+      body: text,
+      meta,
+      at: Date.now()
+    } satisfies LocalResultPayload;
+    setLastResult(payload);
+    pushResultHistory(payload);
   };
 
   const renderWidget = (w: string) => {
@@ -1214,6 +1225,19 @@ export default function Dashboard(): JSX.Element {
             </div>
           </div>
         );
+      case 'chat':
+        return (
+          <ChatPanel
+            tasks={tasks.map((t) => ({ id: t.id, title: t.title, description: t.description }))}
+            agents={agents.map((a) => ({ name: a.name, displayName: a.displayName }))}
+            defaultPlannerModel={profileForm.defaultPlannerModel}
+            defaultCoderModel={profileForm.defaultCoderModel}
+            defaultRagEnabled={profileForm.ragEnabled}
+            defaultRagK={profileForm.ragKDefault}
+            prefillText={chatPrefill}
+            onResult={handleChatResult}
+          />
+        );
       case 'result':
         return (
           <div className="space-y-2">
@@ -1228,6 +1252,16 @@ export default function Dashboard(): JSX.Element {
                 Run Plan or Codegen to see results here.
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-slate-400">History: {resultHistory.length}</div>
+              <button
+                className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-50"
+                onClick={() => lastResult && setResultModal(lastResult)}
+                disabled={!lastResult}
+              >
+                View full results
+              </button>
+            </div>
           </div>
         );
       case 'workflowRuns': {
@@ -1456,6 +1490,28 @@ export default function Dashboard(): JSX.Element {
                 ✕
               </button>
             </div>
+            {resultHistory.length > 0 && (
+              <div className="mb-4">
+                <div className="text-xs uppercase text-gray-500 mb-2">History</div>
+                <div className="max-h-32 overflow-auto divide-y divide-gray-200 border border-gray-200 rounded">
+                  {resultHistory.map((r, idx) => (
+                    <button
+                      key={`${r.at ?? idx}`}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-50 flex justify-between items-center"
+                      onClick={() => setResultModal(r)}
+                    >
+                      <div>
+                        <div className="text-sm text-gray-900">{r.title}</div>
+                        <div className="text-xs text-gray-500 truncate">{(r.body || '').slice(0, 120)}</div>
+                      </div>
+                      <div className="text-[11px] text-gray-500 ml-2 whitespace-nowrap">
+                        {r.at ? new Date(r.at).toLocaleTimeString() : ''}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {resultModal?.meta && (
               <div className="text-xs text-gray-600 mb-3 space-y-1">
                 <div>Model: {resultModal.meta?.model || 'n/a'}</div>

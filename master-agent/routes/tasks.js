@@ -32,12 +32,14 @@ router.get('/', async (req, res) => {
         ...t.toJSON(),
         latestDelegation: latest
           ? {
-              id: latest.id,
-              status: latest.status,
-              createdAt: latest.createdAt,
-              updatedAt: latest.updatedAt,
-              events: latest.events
-            }
+            id: latest.id,
+            status: latest.status,
+            createdAt: latest.createdAt,
+            updatedAt: latest.updatedAt,
+            events: latest.events,
+            iterations: latest.iterations, // Include iterations for "View Results"
+            result: latest.result // Include result summary
+          }
           : null
       };
     });
@@ -99,21 +101,28 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Delegate task (forward to delegate service)
+const DelegationEngine = require('../services/DelegationEngine');
+
+// Delegate task (using DelegationEngine)
 router.post('/delegate', async (req, res) => {
-  const { task } = req.body || {};
-  if (!task) {
-    return res.status(400).json({ error: 'task payload is required' });
+  const { taskId, agentName, model, provider, apiKey, endpoint } = req.body || {};
+
+  if (!taskId) {
+    return res.status(400).json({ error: 'taskId is required' });
   }
 
-  const delegateUrl = process.env.DELEGATE_URL || 'http://localhost:7788/delegate';
-
   try {
-    const response = await axios.post(delegateUrl, { task });
-    return res.status(200).json({ status: 'delegated', result: response.data });
+    const result = await DelegationEngine.delegateTask(taskId, {
+      agentName,
+      model,
+      provider,
+      apiKey,
+      endpoint
+    });
+    return res.status(200).json(result);
   } catch (err) {
-    const detail = err?.response?.data || err?.message || 'Delegate service failed';
-    return res.status(502).json({ error: 'Failed to delegate task', detail });
+    const detail = err?.message || 'Delegate service failed';
+    return res.status(500).json({ error: 'Failed to delegate task', detail });
   }
 });
 

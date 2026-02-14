@@ -50,7 +50,7 @@ app.get('/health', (req, res) => {
 
 // Root endpoint
 app.get('/', (req, res) => {
-  res.status(200).json({ 
+  res.status(200).json({
     message: 'Master Agent API',
     version: '1.0.0',
     timestamp: new Date().toISOString()
@@ -67,6 +67,8 @@ app.use('/api/delegate', delegateRouter);
 app.use('/delegations', delegationsRouter);
 app.use('/profile', profileRouter);
 app.use('/chat', chatRouter);
+app.use('/mcp', require('./routes/mcp'));
+app.use('/memory', require('./routes/memory'));
 
 // Initialize plugin system
 const pluginManager = new PluginManager();

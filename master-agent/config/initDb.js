@@ -8,6 +8,7 @@ const MasterProfile = require('../models/MasterProfile');
 const ChatLog = require('../models/ChatLog');
 const PlanLog = require('../models/PlanLog');
 const WorkflowRun = require('../models/WorkflowRun');
+const Memory = require('../models/Memory');
 
 db.models.Task = Task;
 db.models.Agent = Agent;
@@ -18,13 +19,15 @@ db.models.MasterProfile = MasterProfile;
 db.models.ChatLog = ChatLog;
 db.models.PlanLog = PlanLog;
 db.models.WorkflowRun = WorkflowRun;
+db.models.Memory = Memory;
 
 async function initDatabase() {
   try {
     // Allow configurable sync strategy to avoid noisy backup/restore in dev
-    // DB_SYNC_STRATEGY: 'alter' (default for Postgres), 'sync' (no alter), 'none'
-    // For SQLite, default to 'sync' to prevent repeated backup/drop cycles when enums/JSON trigger ALTER churn.
-    const defaultStrategy = db.sequelize.getDialect() === 'sqlite' ? 'sync' : 'alter';
+    // DB_SYNC_STRATEGY: 'alter' (default), 'sync' (no alter), 'none'
+    // Switch sqlite default to 'alter' so additive columns (e.g., parentId) are applied automatically.
+    const defaultStrategy = 'alter';
+
     const strategy = (process.env.DB_SYNC_STRATEGY || defaultStrategy).toLowerCase();
 
     if (strategy === 'none') {

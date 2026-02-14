@@ -26,9 +26,19 @@ interface ChatPanelProps {
   defaultRagEnabled?: boolean;
   defaultRagK?: number;
   prefillText?: string;
+  onResult?: (payload: { text: string; meta?: Record<string, any>; mode: ChatMode }) => void;
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ tasks, agents, defaultPlannerModel, defaultCoderModel, defaultRagEnabled = true, defaultRagK = 6, prefillText = '' }) => {
+const ChatPanel: React.FC<ChatPanelProps> = ({
+  tasks,
+  agents,
+  defaultPlannerModel,
+  defaultCoderModel,
+  defaultRagEnabled = true,
+  defaultRagK = 6,
+  prefillText = '',
+  onResult
+}) => {
   const [mode, setMode] = useState<ChatMode>('plan');
   const [input, setInput] = useState('');
   const [selection, setSelection] = useState('');
@@ -121,6 +131,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ tasks, agents, defaultPlannerMode
               }
               return next;
             });
+          }
+          const finalText = payload?.text || current;
+          if (finalText) {
+            onResult?.({ text: finalText, meta: payload || undefined, mode });
           }
         },
         onError: (msg) => {

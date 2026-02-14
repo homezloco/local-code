@@ -14,9 +14,16 @@ const Task = db.sequelize.define('Task', {
   description: {
     type: DataTypes.TEXT
   },
+  parentId: {
+    type: DataTypes.UUID,
+    allowNull: true
+  },
   status: {
-    type: DataTypes.ENUM('pending', 'in_progress', 'completed', 'failed', 'cancelled'),
-    defaultValue: 'pending'
+    type: DataTypes.ENUM('pending', 'in_progress', 'delegated', 'completed', 'failed', 'cancelled', 'needs_clarification', 'review'),
+    defaultValue: 'pending',
+    validate: {
+      isIn: [['pending', 'in_progress', 'delegated', 'completed', 'failed', 'cancelled', 'needs_clarification', 'review']]
+    }
   },
   priority: {
     type: DataTypes.ENUM('low', 'medium', 'high', 'urgent'),

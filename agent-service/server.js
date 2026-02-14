@@ -15,6 +15,8 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+import mcpService from './services/MCPService.js';
+
 const logDir = join(__dirname, 'logs');
 mkdirSync(logDir, { recursive: true });
 
@@ -201,6 +203,39 @@ app.get('/models', async (req, res) => {
   } catch (error) {
     logger.error('List models error', { error: error?.message || String(error) });
     res.status(502).json({ error: 'Failed to list models', detail: error?.message || String(error) });
+  }
+});
+
+// Cancel endpoint
+app.post('/cancel', async (req, res) => {
+  try {
+    const { taskId } = req.body;
+    // In a real implementation, we would track active tasks and abort their controllers.
+    // For now, we'll just log it and potentially implement a global map of active tasks.
+    logger.info(`Received cancellation request for task: ${taskId}`);
+    res.json({ status: 'cancelled', taskId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// MCP Management Endpoints
+app.post('/mcp/connect', async (req, res) => {
+  try {
+    const { name, command, args, env } = req.body;
+    await mcpService.connectStdio(name, { command, args, env });
+    res.json({ status: 'connected', name });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/mcp/tools', async (req, res) => {
+  try {
+    const tools = await mcpService.listTools();
+    res.json({ tools });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -459,9 +494,34 @@ app.post('/execute', async (req, res) => {
       endpoint: req.body.endpoint
     };
 
-    const baseSystem = overridePrompt
-      ? overridePrompt
-      : `You are an autonomous agent following a short ReAct loop. Respond ONLY in JSON with keys: thought, action, observation, status. status can be one of: continue, final_answer, needs_clarification, error.`;
+    const baseSystem = `You are an autonomous AI agent.
+Your goal is to complete the task by executing a sequence of actions.
+You can use tools (if available) or rely on your internal knowledge.
+
+Response Format (JSON only):
+{
+  "thought": "Reasoning about what to do next",
+  "action": "The specific action/tool to run or 'final_answer'",
+  "observation": "Arguments for the tool (JSON) or the final answer text",
+  "status": "continue|final_answer|needs_clarification|error",
+  "nextTasks": [ { "title": "...", "description": "...", "priority": "low|medium|high|urgent" } ]
+}
+Rules:
+1. "nextTasks": Optional array. Include ONLY when you have completed the main goal (status="final_answer") but see clear follow-up work needed.
+2. If status is "final_answer", observation is the result.
+3. If input is a tool output, use it to determine the next step.`;
+
+    // Fetch available tools
+    let mcpTools = [];
+    try {
+      mcpTools = await mcpService.listTools();
+    } catch (e) {
+      logger.warn('Failed to list MCP tools', { error: e.message });
+    }
+
+    const toolsDesc = mcpTools.length > 0
+      ? `\n\nAvailable Tools:\n${mcpTools.map(t => `- ${t.name}: ${t.description} (Schema: ${JSON.stringify(t.inputSchema)})`).join('\n')}\n\nTo call a tool, set status="call_tool", action="${mcpTools[0].name}", observation=JSON_ARGUMENTS.`
+      : '';
 
     let status = 'continue';
     let finalAnswer = null;
@@ -476,7 +536,7 @@ app.post('/execute', async (req, res) => {
 
       const prompt = overridePrompt
         ? baseSystem
-        : `${baseSystem}\n\nTask: ${taskInput}\nContext:\n${ctxText || 'None'}\nHistory:\n${historyText || 'None'}\n\nReturn next JSON step. If done, set status to final_answer and include observation as the answer. If clarification is needed, set status to needs_clarification and include questions in observation.`;
+        : `${baseSystem}${toolsDesc}\n\nTask: ${taskInput}\nContext:\n${ctxText || 'None'}\nHistory:\n${historyText || 'None'}\n\nReturn next JSON step. If done, set status to final_answer and include observation as the answer. If clarification is needed, set status to needs_clarification and include questions in observation.`;
 
       try {
         let response = await callOllama(model, prompt, FALLBACK_PLANNER_MODEL, providerPayload, { formatJson: Boolean(overridePrompt) });
@@ -497,10 +557,30 @@ app.post('/execute', async (req, res) => {
         const action = parsed?.action || 'unknown';
         const observation = parsed?.observation || response;
         status = parsed?.status || 'continue';
+        const nextTasks = Array.isArray(parsed?.nextTasks) ? parsed.nextTasks : [];
 
-        const step = { thought, action, observation, status, ts: Date.now() };
+        const step = { thought, action, observation, status, nextTasks, ts: Date.now() };
+
+        if (status === 'call_tool') {
+          try {
+            // For tool calls, 'observation' field in JSON response should hold the arguments
+            const toolArgs = typeof observation === 'string' ? safeJsonParse(observation) || {} : observation;
+            logger.info(`Calling MCP tool: ${action}`, toolArgs);
+
+            const toolResult = await mcpService.callTool(action, toolArgs);
+
+            // Update step with actual result
+            step.observation = JSON.stringify(toolResult);
+            step.status = 'continue'; // Continue loop after tool execution
+            logger.info(`Tool result:`, toolResult);
+          } catch (toolErr) {
+            step.observation = `Tool execution failed: ${toolErr.message}`;
+            step.status = 'error';
+          }
+        }
+
         iterations.push(step);
-        events.push({ event: action, data: observation, ts: step.ts });
+        events.push({ event: action, data: step.observation, ts: step.ts });
 
         if (status === 'final_answer') {
           finalAnswer = observation;
@@ -526,6 +606,7 @@ app.post('/execute', async (req, res) => {
       finalAnswer,
       iterations,
       events,
+      nextTasks: iterations.length > 0 ? (iterations[iterations.length - 1].nextTasks || []) : [],
       context: { ragContext, ragError },
       modelTried: model,
       fallbackTried: FALLBACK_PLANNER_MODEL,

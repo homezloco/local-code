@@ -70,7 +70,8 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
     try {
       const resp = await fetch(`${API}/api/delegate/${task.id}/delegations`);
       if (resp.ok) {
-        const delegations = await resp.json();
+        const json = await resp.json();
+        const delegations = json?.data || json || [];
         const latest = delegations?.[0];
         if (latest?.result) {
           setFullResultModal({ taskTitle: task.title, result: formatResult(latest.result), loading: false });
