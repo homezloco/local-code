@@ -1,0 +1,25 @@
+{
+  "name": "observability-sweep",
+  "description": "Identify missing logs/metrics in delegation, cancel, and workflow suggestion flows; propose additions.",
+  "agent": "coding-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Trace critical paths",
+      "description": "Review delegation start/cancel, workflow suggestion, and SSE streaming paths; map current logging/metrics.",
+      "priority": "medium"
+    },
+    {
+      "title": "Find gaps",
+      "description": "List missing logs/metrics (latency, errors, cancels, parse failures, retries) and where to add them.",
+      "priority": "medium"
+    },
+    {
+      "title": "Recommend instrumentation",
+      "description": "Propose concrete log statements/fields and metric names with cardinality guidance.",
+      "priority": "medium"
+    }
+  ]
+}

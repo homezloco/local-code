@@ -1,0 +1,25 @@
+{
+  "name": "ux-copy-audit",
+  "description": "Audit dashboard UX copy, empty states, and affordances; propose fixes.",
+  "agent": "master-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Survey dashboards",
+      "description": "Walk through tasks, delegation stream, workflow suggestions, settings. Note unclear copy, missing empty/disabled states, and confusing flows.",
+      "priority": "medium"
+    },
+    {
+      "title": "Propose copy/UI tweaks",
+      "description": "List concrete wording changes and UI adjustments (labels, helper text, button states) with rationale.",
+      "priority": "medium"
+    },
+    {
+      "title": "Highlight critical UX gaps",
+      "description": "Call out top 3 UX issues impacting user success and suggest next actions.",
+      "priority": "high"
+    }
+  ]
+}

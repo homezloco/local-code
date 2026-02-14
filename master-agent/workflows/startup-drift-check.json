@@ -1,0 +1,25 @@
+{
+  "name": "startup-drift-check",
+  "description": "Validate workflow files, schedules, and auto flags; highlight drift or disabled jobs.",
+  "agent": "master-agent",
+  "auto": false,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Enumerate workflow files",
+      "description": "List all workflow JSON files, record schedule and auto flag, and validate schema.",
+      "priority": "medium"
+    },
+    {
+      "title": "Detect drift",
+      "description": "Flag invalid schemas, non-startup schedules, and auto=false items; note missing descriptions or agents.",
+      "priority": "medium"
+    },
+    {
+      "title": "Recommendations",
+      "description": "Provide actions to fix/enable/rename workflows and clean up unused files.",
+      "priority": "medium"
+    }
+  ]
+}

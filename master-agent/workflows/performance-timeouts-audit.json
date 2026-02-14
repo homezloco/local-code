@@ -1,0 +1,25 @@
+{
+  "name": "performance-timeouts-audit",
+  "description": "Review delegation streams and external calls for timeouts/backoffs and propose performance fixes.",
+  "agent": "coding-agent",
+  "auto": false,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Identify long-running paths",
+      "description": "Map delegation SSE, agent-service calls, shared-rag, and external requests; note missing timeouts or aborts.",
+      "priority": "medium"
+    },
+    {
+      "title": "Check backoff and retry",
+      "description": "Find unbounded retries or missing exponential backoff; recommend safe retry policies.",
+      "priority": "medium"
+    },
+    {
+      "title": "Propose fixes",
+      "description": "List concrete code changes (timeouts, abort signals, buffer limits) with file/line references when possible.",
+      "priority": "high"
+    }
+  ]
+}

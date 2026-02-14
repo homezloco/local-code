@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import { mkdirSync } from 'fs';
+import { createLogger, format as winstonFormat, transports as winstonTransports } from 'winston';
 
 // Universal fetch shim to support Node versions without global fetch and to ensure the value is a function
 const fetch =
@@ -12,6 +14,15 @@ import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const logDir = join(__dirname, 'logs');
+mkdirSync(logDir, { recursive: true });
+
+const logger = createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winstonFormat.combine(winstonFormat.timestamp(), winstonFormat.errors({ stack: true }), winstonFormat.json()),
+  transports: [new winstonTransports.Console(), new winstonTransports.File({ filename: join(logDir, 'app.log') })]
+});
 
 const safeJsonParse = (text) => {
   try {
@@ -75,7 +86,7 @@ async function listOllamaModels() {
     cachedAt = now;
     return cachedModels;
   } catch (err) {
-    console.error('Ollama tags fetch error:', err?.message || err);
+    logger.error('Ollama tags fetch error', { message: err?.message || err });
     return cachedModels || [];
   }
 }
@@ -85,7 +96,7 @@ async function selectModel(requested, fallbackDefault) {
   // Only validate Ollama models; for external providers assume caller knows.
   const models = await listOllamaModels();
   if (models.includes(model)) return model;
-  console.warn(`Model ${model} not found in Ollama tags; falling back to ${fallbackDefault}`);
+  logger.warn(`Model ${model} not found in Ollama tags; falling back to ${fallbackDefault}`);
   return fallbackDefault;
 }
 
@@ -115,21 +126,24 @@ const resolveProvider = (providerPayload) => {
   }
 };
 
-const callOllama = async (model, prompt, fallbackModel = null, providerPayload = {}, { stream = false } = {}) => {
+const callOllama = async (model, prompt, fallbackModel = null, providerPayload = {}, { stream = false, formatJson = false } = {}) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
   let lastErr;
   const modelsToTry = [model, ...(fallbackModel ? [fallbackModel] : [])];
+
   let attempt = 0;
   try {
     for (const m of modelsToTry) {
       attempt += 1;
       try {
         const { url, headers } = resolveProvider(providerPayload);
+        const body = { model: m, prompt, stream: Boolean(stream) };
+        if (formatJson) body.format = 'json';
         const response = await fetch(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ model: m, prompt, stream: Boolean(stream) }),
+          body: JSON.stringify(body),
           signal: controller.signal
         });
 
@@ -185,7 +199,7 @@ app.get('/models', async (req, res) => {
     const models = (data?.models || []).map((m) => m?.name).filter(Boolean);
     res.json({ models });
   } catch (error) {
-    console.error('List models error:', error);
+    logger.error('List models error', { error: error?.message || String(error) });
     res.status(502).json({ error: 'Failed to list models', detail: error?.message || String(error) });
   }
 });
@@ -227,6 +241,7 @@ app.post('/plan/stream', async (req, res) => {
         ragContext = data.results || [];
       } catch (err) {
         ragError = err?.message || String(err);
+        logger.warn('Plan stream RAG fetch failed, continuing without context', { detail: ragError });
         sendEvent('warn', { message: 'RAG fetch failed, continuing without context', detail: ragError });
       }
     }
@@ -244,6 +259,7 @@ app.post('/plan/stream', async (req, res) => {
 
     await streamOllama({ res, model, prompt: fullPrompt, fallbackModel: FALLBACK_PLANNER_MODEL, providerPayload });
   } catch (error) {
+    logger.error('Plan stream error', { error: error?.message || String(error) });
     sendEvent('error', { message: 'Failed to generate plan', detail: error?.message || String(error) });
   } finally {
     res.end();
@@ -275,7 +291,7 @@ app.post('/plan', async (req, res) => {
         ragContext = data.results || [];
       } catch (err) {
         ragError = err?.message || String(err);
-        console.error('RAG fetch error, continuing without context:', ragError);
+        logger.error('Plan RAG fetch error, continuing without context', { detail: ragError });
       }
     }
 
@@ -299,7 +315,7 @@ app.post('/plan', async (req, res) => {
       provider: providerPayload.provider
     });
   } catch (error) {
-    console.error('Plan error:', error);
+    logger.error('Plan error', { error: error?.message || String(error) });
     res.status(502).json({ error: 'Failed to generate plan', detail: error?.message || String(error) });
   }
 });
@@ -340,6 +356,7 @@ app.post('/codegen/stream', async (req, res) => {
         ragContext = data.results || [];
       } catch (err) {
         ragError = err?.message || String(err);
+        logger.warn('Codegen stream RAG fetch failed, continuing without context', { detail: ragError });
         sendEvent('warn', { message: 'RAG fetch failed, continuing without context', detail: ragError });
       }
     }
@@ -357,6 +374,7 @@ app.post('/codegen/stream', async (req, res) => {
 
     await streamOllama({ res, model, prompt: fullPrompt, fallbackModel: FALLBACK_CODER_MODEL, providerPayload });
   } catch (error) {
+    logger.error('Codegen stream error', { error: error?.message || String(error) });
     sendEvent('error', { message: 'Failed to generate code', detail: error?.message || String(error) });
   } finally {
     res.end();
@@ -369,7 +387,6 @@ app.post('/codegen', async (req, res) => {
     const { prompt, context } = req.body;
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
-    // Get context from RAG if needed
     let ragContext = [];
     if (context?.useRAG) {
       const response = await fetch(`${RAG_URL}/search`, {
@@ -393,16 +410,17 @@ app.post('/codegen', async (req, res) => {
     const code = await callOllama(model, fullPrompt, FALLBACK_CODER_MODEL, providerPayload);
     res.json({ code, context: ragContext, modelTried: model, fallbackTried: FALLBACK_CODER_MODEL, provider: providerPayload.provider });
   } catch (error) {
-    console.error('Codegen error:', error);
+    logger.error('Codegen error', { error: error?.message || String(error) });
     res.status(502).json({ error: 'Failed to generate code', detail: error?.message || String(error) });
   }
 });
 
-// Autonomous ReAct-style execute loop (non-streaming)
+// Execute endpoint (supports overridePrompt)
 app.post('/execute', async (req, res) => {
   try {
-    const { task, context = {}, maxIterations = 6, autonomous = true } = req.body || {};
-    if (!task || typeof task !== 'string') {
+    const { task, overridePrompt, context = {}, maxIterations = 6, autonomous = true } = req.body || {};
+    const taskInput = overridePrompt || task;
+    if (!taskInput || typeof taskInput !== 'string') {
       return res.status(400).json({ error: 'task is required' });
     }
 
@@ -413,7 +431,7 @@ app.post('/execute', async (req, res) => {
         const response = await fetch(`${RAG_URL}/search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: task, k: context.k || 8 })
+          body: JSON.stringify({ query: taskInput, k: context.k || 8 })
         });
         if (!response.ok) {
           const text = await response.text();
@@ -423,6 +441,7 @@ app.post('/execute', async (req, res) => {
         ragContext = data.results || [];
       } catch (err) {
         ragError = err?.message || String(err);
+        logger.warn('Execute RAG fetch failed', { detail: ragError });
       }
     }
 
@@ -432,6 +451,7 @@ app.post('/execute', async (req, res) => {
 
     const iterations = [];
     const events = [];
+
     const model = await selectModel(req.body.model, PLANNER_MODEL);
     const providerPayload = {
       provider: req.body.provider,
@@ -439,7 +459,9 @@ app.post('/execute', async (req, res) => {
       endpoint: req.body.endpoint
     };
 
-    const baseSystem = `You are an autonomous agent following a short ReAct loop. Respond ONLY in JSON with keys: thought, action, observation, status. status can be one of: continue, final_answer, needs_clarification, error.`;
+    const baseSystem = overridePrompt
+      ? overridePrompt
+      : `You are an autonomous agent following a short ReAct loop. Respond ONLY in JSON with keys: thought, action, observation, status. status can be one of: continue, final_answer, needs_clarification, error.`;
 
     let status = 'continue';
     let finalAnswer = null;
@@ -447,15 +469,30 @@ app.post('/execute', async (req, res) => {
 
     while (status === 'continue' && iteration < maxIterations) {
       iteration += 1;
+
       const historyText = iterations
         .map((it, idx) => `# Step ${idx + 1}\nThought: ${it.thought}\nAction: ${it.action}\nObservation: ${it.observation}`)
         .join('\n\n');
 
-      const prompt = `${baseSystem}\n\nTask: ${task}\nContext:\n${ctxText || 'None'}\nHistory:\n${historyText || 'None'}\n\nReturn next JSON step. If done, set status to final_answer and include observation as the answer. If clarification is needed, set status to needs_clarification and include questions in observation.`;
+      const prompt = overridePrompt
+        ? baseSystem
+        : `${baseSystem}\n\nTask: ${taskInput}\nContext:\n${ctxText || 'None'}\nHistory:\n${historyText || 'None'}\n\nReturn next JSON step. If done, set status to final_answer and include observation as the answer. If clarification is needed, set status to needs_clarification and include questions in observation.`;
 
       try {
-        const response = await callOllama(model, prompt, FALLBACK_PLANNER_MODEL, providerPayload);
-        const parsed = safeJsonParse(response);
+        let response = await callOllama(model, prompt, FALLBACK_PLANNER_MODEL, providerPayload, { formatJson: Boolean(overridePrompt) });
+        let parsed = safeJsonParse(response);
+
+        if (!parsed) {
+          const m = String(response).match(/```json\s*([\s\S]*?)\s*```/i) || String(response).match(/{[\s\S]*}/);
+          if (m) parsed = safeJsonParse(m[1] || m[0]);
+        }
+
+        if (!parsed) {
+          const retryPrompt = `${baseSystem}\n\nYour previous response was invalid JSON. Respond with ONLY valid JSON matching keys: thought, action, observation, status (continue|final_answer|needs_clarification|error). Task: ${taskInput}\nContext:\n${ctxText || 'None'}\nHistory:\n${historyText || 'None'}`;
+          response = await callOllama(model, retryPrompt, FALLBACK_PLANNER_MODEL, providerPayload, { formatJson: true });
+          parsed = safeJsonParse(response) || safeJsonParse((response.match(/```json\s*([\s\S]*?)\s*```/i) || response.match(/{[\s\S]*}/))?.[1] || (response.match(/```json\s*([\s\S]*?)\s*```/i) || response.match(/{[\s\S]*}/))?.[0]);
+        }
+
         const thought = parsed?.thought || 'N/A';
         const action = parsed?.action || 'unknown';
         const observation = parsed?.observation || response;
@@ -477,6 +514,7 @@ app.post('/execute', async (req, res) => {
         iterations.push({ thought: 'Error', action: 'error', observation: errorMsg, status: 'error', ts: Date.now() });
         events.push({ event: 'error', data: { message: errorMsg }, ts: Date.now() });
         status = 'error';
+        logger.error('Execute loop error', { message: errorMsg });
         break;
       }
     }
@@ -494,6 +532,7 @@ app.post('/execute', async (req, res) => {
       provider: providerPayload.provider
     });
   } catch (error) {
+    logger.error('Execute endpoint failure', { error: error?.message || String(error) });
     res.status(500).json({ error: error?.message || 'execute failed' });
   }
 });
@@ -547,7 +586,7 @@ app.post('/delegate', async (req, res) => {
         ragContext = data.results || [];
       } catch (err) {
         ragError = err?.message || String(err);
-        console.error('Delegation RAG fetch error:', ragError);
+        logger.warn('Delegation RAG fetch error', { detail: ragError });
       }
     }
 
@@ -574,6 +613,7 @@ app.post('/delegate', async (req, res) => {
       delegationPlan = await callOllama(plannerModel, planPrompt, FALLBACK_PLANNER_MODEL, providerPayload);
       sendEvent('plan', { plan: delegationPlan, model: plannerModel, fallback: FALLBACK_PLANNER_MODEL, provider: providerPayload.provider });
     } catch (err) {
+      logger.error('Delegation plan generation failed', { error: err?.message || String(err) });
       sendEvent('error', { message: 'Failed to generate delegation plan', detail: err?.message || String(err) });
       res.end();
       clearInterval(heartbeat);
@@ -594,6 +634,7 @@ app.post('/delegate', async (req, res) => {
           provider: providerPayload.provider
         });
       } catch (err) {
+        logger.error('Agent delegation error', { agent: agent.name || agent.id, error: err?.message || String(err) });
         sendEvent('agent_error', {
           agent: agent.name || agent.id,
           message: err?.message || String(err)
@@ -605,7 +646,7 @@ app.post('/delegate', async (req, res) => {
     sendEvent('done', { completed: true });
     res.end();
   } catch (error) {
-    console.error('Delegate error:', error);
+    logger.error('Delegate error', { error: error?.message || String(error) });
     sendEvent('error', { message: 'Delegation failed', detail: error?.message || String(error) });
     res.end();
   } finally {
@@ -615,8 +656,8 @@ app.post('/delegate', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Agent service running on port ${PORT}`);
-  console.log(`RAG service URL: ${RAG_URL}`);
-  console.log(`Planner model: ${PLANNER_MODEL}`);
-  console.log(`Coder model: ${CODER_MODEL}`);
+  logger.info('Agent service running', { port: PORT });
+  logger.info('RAG service URL', { url: RAG_URL });
+  logger.info('Planner model configured', { model: PLANNER_MODEL });
+  logger.info('Coder model configured', { model: CODER_MODEL });
 });

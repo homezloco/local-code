@@ -1,0 +1,25 @@
+{
+  "name": "workflow-suggestion-hardening",
+  "description": "Run multiple workflow suggestions, validate JSON, and report parse/validation issues.",
+  "agent": "master-agent",
+  "auto": false,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Generate suggestions",
+      "description": "Request workflow suggestions for 3 topics (ops, ux, infra) and capture raw responses + parsed JSON.",
+      "priority": "medium"
+    },
+    {
+      "title": "Validate JSON",
+      "description": "Apply schema validation to each suggestion; record failures and offending fields.",
+      "priority": "medium"
+    },
+    {
+      "title": "Report fixes",
+      "description": "Summarize parse/validation errors and propose prompt or parsing adjustments to improve success rate.",
+      "priority": "medium"
+    }
+  ]
+}

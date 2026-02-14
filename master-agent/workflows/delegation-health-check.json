@@ -1,0 +1,25 @@
+{
+  "name": "delegation-health-check",
+  "description": "Exercise delegate + cancel flow and verify task/delegation statuses.",
+  "agent": "master-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Start test delegation",
+      "description": "Create a small test task and delegate it to a safe agent; capture taskId/delegationId.",
+      "priority": "medium"
+    },
+    {
+      "title": "Trigger cancel",
+      "description": "Call POST /api/delegate/{taskId}/cancel and confirm task status -> cancelled and active delegations -> cancelled.",
+      "priority": "medium"
+    },
+    {
+      "title": "Report results",
+      "description": "Summarize statuses before/after cancel, any errors, and UI surfacing gaps.",
+      "priority": "medium"
+    }
+  ]
+}

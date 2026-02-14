@@ -16,7 +16,7 @@ const TaskDelegation = db.sequelize.define('TaskDelegation', {
     allowNull: false
   },
   status: {
-    type: DataTypes.ENUM('queued', 'running', 'completed', 'failed', 'review'),
+    type: DataTypes.ENUM('queued', 'running', 'completed', 'failed', 'review', 'cancelled'),
     defaultValue: 'queued'
   },
   intent: {

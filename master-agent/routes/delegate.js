@@ -6,6 +6,7 @@ const {
   getActiveDelegations,
   approveDelegation,
   rejectDelegation,
+  cancelDelegationForTask,
   executeTaskLoop,
   classifyTask,
   delegateToMultipleAgents,
@@ -22,9 +23,21 @@ router.post('/:taskId/delegate', async (req, res) => {
     const { agentName, model, provider, apiKey, endpoint, autonomous } = req.body;
 
     const result = await delegateTask(taskId, { agentName, model, provider, apiKey, endpoint, autonomous });
-    res.json(result);
+    res.json({ status: 'success', data: result, error: null, message: 'Delegation started' });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to delegate task' });
+  }
+});
+
+// Cancel a task and any active delegations
+router.post('/:taskId/cancel', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const reason = req.body?.reason || 'Cancelled by user';
+    const result = await cancelDelegationForTask(taskId, reason);
+    res.json({ status: 'success', data: result, error: null, message: 'Task cancelled' });
+  } catch (error) {
+    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to cancel task' });
   }
 });
 
@@ -34,9 +47,9 @@ router.post('/:taskId/execute', async (req, res) => {
     const { taskId } = req.params;
     const { agentName, model, provider, apiKey, endpoint, autonomous } = req.body || {};
     const result = await executeTaskLoop(taskId, { agentName, model, provider, apiKey, endpoint, autonomous });
-    res.json({ delegation: result });
+    res.json({ status: 'success', data: { delegation: result }, error: null, message: 'Execution completed' });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to execute task' });
   }
 });
 
@@ -48,9 +61,9 @@ router.post('/:taskId/classify', async (req, res) => {
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const classification = await classifyTask(task.title, task.description);
-    res.json(classification);
+    res.json({ status: 'success', data: classification, error: null, message: 'Task classified' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ status: 'error', data: null, error: error.message, message: 'Failed to classify task' });
   }
 });
 
@@ -58,9 +71,9 @@ router.post('/:taskId/classify', async (req, res) => {
 router.get('/:taskId/delegations', async (req, res) => {
   try {
     const delegations = await getDelegationHistory(req.params.taskId);
-    res.json(delegations);
+    res.json({ status: 'success', data: delegations, error: null, message: 'Delegations fetched' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ status: 'error', data: null, error: error.message, message: 'Failed to fetch delegations' });
   }
 });
 
@@ -106,7 +119,7 @@ router.post('/:taskId/clarify', async (req, res) => {
     const { taskId } = req.params;
     const { answers } = req.body || {};
     const task = await Task.findByPk(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) return res.status(404).json({ status: 'error', data: null, error: 'Task not found', message: 'Task not found' });
 
     const clarifications = Array.isArray(task.metadata?.clarifications) ? task.metadata.clarifications : [];
     if (Array.isArray(answers)) {
@@ -118,9 +131,9 @@ router.post('/:taskId/clarify', async (req, res) => {
     await task.update({ metadata: { ...(task.metadata || {}), clarifications }, status: 'pending' });
 
     const result = await delegateTask(taskId, { autonomous: true });
-    res.json({ status: 're-delegated', delegation: result });
+    res.json({ status: 'success', data: { taskId }, error: null, message: 'Clarifications submitted' });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to submit clarifications' });
   }
 });
 

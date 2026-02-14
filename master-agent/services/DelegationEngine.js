@@ -11,10 +11,12 @@ function safeJsonParse(text) {
     return null;
   }
 }
-
 const AGENT_SERVICE_URL = process.env.AGENT_SERVICE_URL || 'http://127.0.0.1:7788';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const CLASSIFIER_MODEL = process.env.CLASSIFIER_MODEL || 'gemma3:1b';
+const DEFAULT_AGENT_MODEL = process.env.AGENT_MODEL_PRIMARY || 'qwen2.5-coder:14b';
+const FALLBACK_AGENT_MODEL = process.env.AGENT_MODEL_FALLBACK || 'codellama:instruct';
+const TERTIARY_AGENT_MODEL = process.env.AGENT_MODEL_TERTIARY || 'codellama:7b-instruct-q4_0';
 const CLASSIFIER_TIMEOUT_MS = Number(process.env.CLASSIFIER_TIMEOUT_MS || 30000);
 
 const AGENT_CAPABILITIES = {
@@ -40,6 +42,14 @@ const AGENT_CAPABILITIES = {
   }
 
 };
+
+function resolveAgentModel(agentName, explicitModel) {
+  if (explicitModel) return explicitModel;
+  // All agents default to the strongest local model; keep a typed fallback chain.
+  const modelChain = [DEFAULT_AGENT_MODEL, FALLBACK_AGENT_MODEL, TERTIARY_AGENT_MODEL].filter(Boolean);
+  // For future specialization, we can branch per agent here; for now use the same chain.
+  return modelChain[0];
+}
 
 /**
  * Execute a task with a synchronous loop (Thought/Action/Observation) and return the delegation record.
@@ -82,7 +92,7 @@ async function executeTaskLoop(taskId, options = {}) {
       priority: task.priority,
       metadata: task.metadata
     },
-    model: options.model || CLASSIFIER_MODEL,
+    model: resolveAgentModel(classification.agentName, options.model) || CLASSIFIER_MODEL,
     provider: options.provider || 'ollama'
   });
 
@@ -186,6 +196,55 @@ function stripEmbeddings(ragContext) {
   });
 }
 
+function sanitizeText(text, fallback = '') {
+  if (typeof text !== 'string') return fallback;
+  // Strip control characters that can break JSON/clients
+  return text.replace(/[\u0000-\u001F\u007F]+/g, '').slice(0, 8000);
+}
+
+function normalizeRagContext(context) {
+  const cleaned = stripEmbeddings(Array.isArray(context) ? context : []);
+  // keep top 5 entries and trim snippet/text fields to keep payload small
+  return cleaned.slice(0, 5).map((item) => {
+    if (item && typeof item === 'object') {
+      const next = { ...item };
+      if (typeof next.snippet === 'string') next.snippet = next.snippet.slice(0, 1000);
+      if (typeof next.text === 'string') next.text = next.text.slice(0, 1000);
+      return next;
+    }
+    return item;
+  });
+}
+
+function normalizeResultPayload(raw) {
+  const status = raw?.status || 'completed';
+  const questions = Array.isArray(raw?.questions)
+    ? raw.questions
+    : raw?.questions
+      ? [raw.questions]
+      : raw?.observation && typeof raw.observation === 'string'
+        ? [raw.observation]
+        : null;
+
+  const plan = raw?.finalAnswer || raw?.plan || raw?.code || raw?.result || '';
+  const context = raw?.context || {};
+  const ragContext = normalizeRagContext(context?.ragContext || context?.results || context || []);
+
+  return {
+    plan: sanitizeText(plan, JSON.stringify(raw || {})),
+    model: raw?.modelTried || raw?.model,
+    fallback: raw?.fallbackTried,
+    provider: raw?.provider,
+    status,
+    questions,
+    context: {
+      ...context,
+      ragContext
+    },
+    errorMessage: raw?.errorMessage ? sanitizeText(raw.errorMessage) : undefined
+  };
+}
+
 /**
  * Delegate a task to the appropriate agent.
  * Creates a TaskDelegation record and updates the task status.
@@ -232,7 +291,7 @@ async function delegateTask(taskId, options = {}) {
       priority: task.priority,
       metadata: task.metadata
     },
-    model: options.model || CLASSIFIER_MODEL,
+    model: resolveAgentModel(classification.agentName, options.model) || CLASSIFIER_MODEL,
     provider: options.provider || 'ollama'
   });
 
@@ -276,7 +335,7 @@ async function executeDelegate(delegationId, task, classification, options = {})
     events.push({ event: 'start', data: { taskId: task.id, agent: classification.agentName }, ts: Date.now() });
 
     // Build the prompt based on agent type
-    const agentPrompt = buildAgentPrompt(classification.agentName, task);
+    const agentPrompt = options.overridePrompt || buildAgentPrompt(classification.agentName, task);
 
     const autonomous = options.autonomous !== undefined ? options.autonomous : true;
     // Call the agent-service /execute endpoint (autonomous loop)
@@ -287,7 +346,7 @@ async function executeDelegate(delegationId, task, classification, options = {})
         task: agentPrompt,
         context: { useRAG: true, k: 8 },
         autonomous,
-        model: options.model || CLASSIFIER_MODEL,
+        model: resolveAgentModel(classification.agentName, options.model) || CLASSIFIER_MODEL,
         provider: options.provider,
         apiKey: options.apiKey,
         endpoint: options.endpoint
@@ -300,32 +359,11 @@ async function executeDelegate(delegationId, task, classification, options = {})
     }
 
     const data = await resp.json();
-    const resultPlan = data.finalAnswer || data.plan || data.code || data.result || '';
     const loopIterations = Array.isArray(data.iterations) ? data.iterations : [];
     const loopEvents = Array.isArray(data.events) ? data.events : [];
-    const questions = Array.isArray(data.questions)
-      ? data.questions
-      : data.questions
-        ? [data.questions]
-        : data.observation && typeof data.observation === 'string'
-          ? [data.observation]
-          : null;
-    const needsClarification = data.status === 'needs_clarification' || (questions && questions.length > 0);
 
-    const cleanedContext = stripEmbeddings(data.context?.ragContext || data.context?.results || data.context || []);
-
-    const result = {
-      plan: resultPlan || JSON.stringify(data),
-      model: data.modelTried,
-      fallback: data.fallbackTried,
-      provider: data.provider,
-      context: {
-        ...data.context,
-        ragContext: cleanedContext
-      },
-      status: needsClarification ? 'needs_clarification' : data.status,
-      questions
-    };
+    const result = normalizeResultPayload(data);
+    const needsClarification = result.status === 'needs_clarification' || (result.questions && result.questions.length > 0);
 
     // merge remote iterations/events with local start event
     events.push(...loopEvents.map((e) => ({ ...e }))); // shallow copy
@@ -455,6 +493,39 @@ async function approveDelegation(delegationId) {
   }
 
   return delegation;
+}
+
+/**
+ * Cancel a task and mark any active delegations as cancelled.
+ */
+async function cancelDelegationForTask(taskId, reason = 'Cancelled by user') {
+  const task = await Task.findByPk(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const delegations = await TaskDelegation.findAll({ where: { taskId } });
+  const cancelledAt = new Date();
+
+  const cancellationMeta = {
+    ...(task.metadata || {}),
+    lastError: {
+      ...(task.metadata?.lastError || {}),
+      delegationId: null,
+      error: reason,
+      at: cancelledAt.toISOString(),
+      cancelled: true
+    }
+  };
+
+  await task.update({ status: 'cancelled', metadata: cancellationMeta, assignedTo: null });
+
+  const activeStatuses = ['queued', 'running', 'delegated', 'in_progress'];
+  for (const delegation of delegations) {
+    if (activeStatuses.includes(delegation.status)) {
+      await delegation.update({ status: 'cancelled', error: reason, completedAt: cancelledAt });
+    }
+  }
+
+  return { taskId, cancelledAt, reason };
 }
 
 /**
@@ -720,6 +791,7 @@ module.exports = {
   getActiveDelegations,
   approveDelegation,
   rejectDelegation,
+  cancelDelegationForTask,
   delegateToMultipleAgents,
   delegateToAgentsParallel,
   AGENT_CAPABILITIES

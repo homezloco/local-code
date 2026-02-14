@@ -3,6 +3,17 @@ import fg from 'fast-glob';
 import fs from 'fs/promises';
 import path from 'path';
 import fetch from 'node-fetch';
+import { mkdirSync } from 'fs';
+import { createLogger, format as winstonFormat, transports as winstonTransports } from 'winston';
+
+const logDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'logs');
+mkdirSync(logDir, { recursive: true });
+
+const logger = createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winstonFormat.combine(winstonFormat.timestamp(), winstonFormat.errors({ stack: true }), winstonFormat.json()),
+  transports: [new winstonTransports.Console(), new winstonTransports.File({ filename: path.join(logDir, 'app.log') })],
+});
 
 const app = express();
 app.use(express.json());
@@ -16,7 +27,7 @@ const maxFileSize = Number(process.env.MAX_FILE_SIZE || 500_000);
 const requiredEnv = ['OLLAMA_URL', 'EMBED_MODEL'];
 const missingEnv = requiredEnv.filter((k) => !process.env[k]);
 if (missingEnv.length) {
-  console.error(`Missing required env vars: ${missingEnv.join(', ')}`);
+  logger.error(`Missing required env vars: ${missingEnv.join(', ')}`);
   process.exit(1);
 }
 
@@ -54,7 +65,7 @@ async function embedText(text) {
     const data = await res.json();
     return data.embedding;
   } catch (err) {
-    console.warn(`embed fallback: ${(err && err.message) || err}`);
+    logger.warn(`embed fallback: ${(err && err.message) || err}`);
     return undefined;
   }
 }
@@ -75,7 +86,7 @@ async function reindex() {
       }
     } catch (err) {
       // skip unreadable files silently
-      console.warn(`skip ${filePath}: ${(err && err.message) || err}`);
+      logger.warn(`skip ${filePath}: ${(err && err.message) || err}`);
     }
   }
   index = chunks;
@@ -116,7 +127,7 @@ app.post('/search', async (req, res) => {
   try {
     queryEmbedding = await embedText(query);
   } catch (err) {
-    console.warn(`query embed fallback: ${(err && err.message) || err}`);
+    logger.warn(`query embed fallback: ${(err && err.message) || err}`);
   }
   const scored = index
     .map((c) => {
@@ -150,7 +161,7 @@ app.post('/search', async (req, res) => {
         return res.json({ results: abstracts, source: 'web_fallback' });
       }
     } catch (err) {
-      console.warn('web search fallback failed', err?.message || err);
+      logger.warn('web search fallback failed', { message: err?.message || err });
     }
   }
 
@@ -249,5 +260,5 @@ app.get('/health', async (_req, res) => {
 
 const port = process.env.PORT || 7777;
 app.listen(port, () => {
-  console.log(`shared-rag listening on ${port}, root=${workspaceRoot}`);
+  logger.info('shared-rag listening', { port, workspaceRoot });
 });

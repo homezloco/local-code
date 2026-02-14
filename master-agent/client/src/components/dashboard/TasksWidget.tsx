@@ -10,6 +10,7 @@ interface TasksWidgetProps {
   onDelegate: (task: Task, opts?: { autonomous?: boolean }) => void;
   onViewCode?: (task: Task) => void;
   actionLoading?: boolean;
+  onCancel?: (task: Task) => void;
 }
 
 const STATUS_ICONS: Record<string, string> = {
@@ -37,6 +38,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
   onDelegate,
   onViewCode,
   actionLoading,
+  onCancel,
 }) => {
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
   const [autoFlags, setAutoFlags] = useState<Record<string, boolean>>({});
@@ -275,6 +277,19 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                     >
                       Plan
                     </button>
+                    {onCancel && isDelegated && (
+                      <button
+                        type="button"
+                        className="text-red-400 hover:text-red-300 text-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCancel(task);
+                        }}
+                        disabled={actionLoading}
+                      >
+                        Cancel
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="text-amber-400 hover:text-amber-300 text-sm"

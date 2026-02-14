@@ -15,7 +15,7 @@ const Task = db.sequelize.define('Task', {
     type: DataTypes.TEXT
   },
   status: {
-    type: DataTypes.ENUM('pending', 'in_progress', 'completed', 'failed'),
+    type: DataTypes.ENUM('pending', 'in_progress', 'completed', 'failed', 'cancelled'),
     defaultValue: 'pending'
   },
   priority: {

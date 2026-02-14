@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import axios from 'axios';
 
@@ -40,7 +40,7 @@ interface Task {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  status: 'pending' | 'delegated' | 'in_progress' | 'review' | 'completed' | 'failed' | 'cancelled';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   assignedTo?: string;
   dueDate?: string;
@@ -155,10 +155,11 @@ export default function Dashboard(): JSX.Element {
   const [taskPriorityFilter, setTaskPriorityFilter] = useState('all');
   const [taskSearch, setTaskSearch] = useState('');
   const [agentSearch, setAgentSearch] = useState('');
-  type ResultMeta = { model?: string; fallback?: string | null; error?: string; status?: number };
-  type ResultPayload = { title: string; body: string; meta?: ResultMeta };
-  const [resultModal, setResultModal] = useState<ResultPayload | null>(null);
-  const [lastResult, setLastResult] = useState<ResultPayload | null>(null);
+  type LocalResultMeta = { model?: string; fallback?: string | null; error?: string; status?: number };
+  type LocalResultPayload = { title: string; body: string; meta?: LocalResultMeta; at?: number };
+  const [resultModal, setResultModal] = useState<LocalResultPayload | null>(null);
+  const [lastResult, setLastResult] = useState<LocalResultPayload | null>(null);
+  const [resultHistory, setResultHistory] = useState<LocalResultPayload[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [plannerModel, setPlannerModel] = useState('');
   const [coderModel, setCoderModel] = useState('');
@@ -179,6 +180,7 @@ export default function Dashboard(): JSX.Element {
   const [workflowSuggestion, setWorkflowSuggestion] = useState<any | null>(null);
   const [workflowSuggestionValid, setWorkflowSuggestionValid] = useState<boolean | null>(null);
   const [workflowSuggestionError, setWorkflowSuggestionError] = useState('');
+  const [workflowSuggestionRaw, setWorkflowSuggestionRaw] = useState<string>('');
   const [workflowSuggestLoading, setWorkflowSuggestLoading] = useState(false);
   const [workflowEditName, setWorkflowEditName] = useState('');
   const [workflowEditJson, setWorkflowEditJson] = useState('');
@@ -228,6 +230,15 @@ export default function Dashboard(): JSX.Element {
 
   const handleTemplateInputChange = (key: string, value: string) => {
     setTemplateInputs({ ...templateInputs, [key]: value });
+  };
+
+  const fetchTemplatesList = async () => {
+    try {
+      const list = await fetchTemplates();
+      setTemplates(list);
+    } catch (err) {
+      console.error('Failed to fetch templates', err);
+    }
   };
 
   const handleTemplateSubmit = async (event: React.FormEvent) => {
@@ -288,6 +299,429 @@ export default function Dashboard(): JSX.Element {
     }
   };
 
+  const [taskForm, setTaskForm] = useState({
+    title: '',
+    description: '',
+    priority: 'medium'
+  });
+
+  const handleTaskSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    try {
+      await axios.post(`${apiBase}/tasks`, {
+        title: taskForm.title.trim(),
+        description: taskForm.description.trim(),
+        priority: taskForm.priority
+      });
+      setToast({ text: 'Task saved', type: 'success' });
+      setShowTaskModal(false);
+      setEditingTaskId(null);
+      setTaskForm({ title: '', description: '', priority: 'medium' });
+      const res = await axios.get(`${apiBase}/tasks`);
+      setTasks(res.data || []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save task';
+      setFormError(msg);
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const handleCancelTask = async (task: Task) => {
+    if (!window.confirm('Cancel this task?')) return;
+    try {
+      await axios.post(`${apiBase}/api/delegate/${task.id}/cancel`, { reason: 'user cancel' });
+      setToast({ text: 'Task cancelled', type: 'success' });
+      await refreshData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to cancel task';
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const handleCancelStreamingTask = () => {
+    if (!streamingTaskId) return;
+    const task = tasks.find((t) => String(t.id) === String(streamingTaskId));
+    if (!task) {
+      setToast({ text: 'Task not found for cancel', type: 'error' });
+      return;
+    }
+    void handleCancelTask(task);
+  };
+
+  const handleAgentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    try {
+      await axios.post(`${apiBase}/agents/register`, {
+        name: agentForm.name.trim(),
+        displayName: agentForm.displayName.trim(),
+        description: agentForm.description.trim(),
+        capabilities: agentForm.capabilities.split(',').map((s) => s.trim()).filter(Boolean),
+        models: agentForm.models.split(',').map((s) => s.trim()).filter(Boolean)
+      });
+      setToast({ text: 'Agent saved', type: 'success' });
+      setShowAgentModal(false);
+      setEditingAgentId(null);
+      setAgentForm({ name: '', displayName: '', description: '', capabilities: 'task-management,agent-delegation', models: 'master-coordinator', preferredModel: '' });
+      const res = await axios.get(`${apiBase}/agents`);
+      setAgents(res.data || []);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save agent';
+      setFormError(msg);
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const fetchStartupWorkflows = async () => {
+    try {
+      setStartupWorkflowsLoading(true);
+      const res = await axios.get(`${apiBase}/workflows/files`);
+      setStartupWorkflows((res.data?.workflows as StartupWorkflow[]) || []);
+    } catch (err) {
+      console.error('Failed to load startup workflows', err);
+    } finally {
+      setStartupWorkflowsLoading(false);
+    }
+  };
+
+  const fetchWorkflowRuns = async () => {
+    try {
+      setWorkflowRunsLoading(true);
+      const res = await axios.get(`${apiBase}/workflows/runs`);
+      setWorkflowRuns((res.data?.runs as WorkflowRun[]) || []);
+    } catch (err) {
+      console.error('Failed to load workflow runs', err);
+    } finally {
+      setWorkflowRunsLoading(false);
+    }
+  };
+
+  const fetchWorkflowContent = async (name: string) => {
+    if (!name) return;
+    try {
+      setWorkflowEditLoading(true);
+      setWorkflowEditError('');
+      const res = await axios.get(`${apiBase}/workflows/files/${name}`);
+      setWorkflowEditJson(JSON.stringify(res.data?.workflow ?? {}, null, 2));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load workflow';
+      setWorkflowEditError(msg);
+      setWorkflowEditJson('');
+    } finally {
+      setWorkflowEditLoading(false);
+    }
+  };
+
+  const saveWorkflowContent = async () => {
+    if (!workflowEditName || !workflowEditJson.trim()) {
+      setWorkflowEditError('Select a workflow and provide JSON.');
+      return;
+    }
+    let parsed: any;
+    try {
+      parsed = JSON.parse(workflowEditJson);
+    } catch (err) {
+      setWorkflowEditError('Invalid JSON.');
+      return;
+    }
+    try {
+      setWorkflowEditLoading(true);
+      setWorkflowEditError('');
+      const exists = startupWorkflows.some((wf) => wf.name === parsed.name);
+      if (exists && parsed.name !== workflowEditName) {
+        setWorkflowEditError('Name conflicts with another workflow. Rename and try again.');
+        setWorkflowEditLoading(false);
+        return;
+      }
+      if (exists && !window.confirm('Overwrite existing workflow file?')) {
+        setWorkflowEditLoading(false);
+        return;
+      }
+      await axios.put(`${apiBase}/workflows/files/${workflowEditName}`, parsed);
+      setToast({ text: 'Workflow saved', type: 'success' });
+      await fetchStartupWorkflows();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save workflow';
+      setWorkflowEditError(msg);
+    } finally {
+      setWorkflowEditLoading(false);
+    }
+  };
+
+  const toggleWorkflowAuto = async (name: string, auto: boolean) => {
+    try {
+      await axios.post(`${apiBase}/workflows/files/${name}/auto`, { auto });
+      await fetchStartupWorkflows();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to update workflow auto flag';
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const suggestWorkflow = async (approve = false) => {
+    try {
+      setWorkflowSuggestLoading(true);
+      setWorkflowSuggestionError('');
+      setWorkflowSuggestionRaw('');
+      const res = await axios.post(`${apiBase}/workflows/suggest`, {
+        topic: workflowSuggestTopic,
+        agent: workflowSuggestAgent,
+        approve,
+        workflow: approve ? workflowSuggestion : undefined
+      });
+      setWorkflowSuggestion(res.data?.data || res.data?.proposal || null);
+      setWorkflowSuggestionValid(res.data?.status === 'success');
+      if (res.data?.error) setWorkflowSuggestionError(res.data.error);
+      if (res.data?.rawResponse) setWorkflowSuggestionRaw(res.data.rawResponse);
+      if (res.data?.saved) {
+        setToast({ text: 'Workflow saved', type: 'success' });
+        await fetchStartupWorkflows();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to suggest workflow';
+      setWorkflowSuggestionError(msg);
+      setToast({ text: msg, type: 'error' });
+    } finally {
+      setWorkflowSuggestLoading(false);
+    }
+  };
+
+  const loadProfile = async () => {
+    try {
+      setProfileLoading(true);
+      setProfileError('');
+      const res = await axios.get(`${apiBase}/profile`);
+      const p: MasterProfile = res.data;
+      setProfileForm({
+        name: p.name || 'master-agent',
+        displayName: p.displayName || 'Master Agent',
+        persona: p.persona || '',
+        traitTone: (p.traits || {}).tone || 'concise',
+        traitRisk: (p.traits || {}).risk || 'cautious',
+        traitDomain: (p.traits || {}).domain || 'general',
+        defaultPlannerModel: (p.variables || {}).defaultPlannerModel || 'codellama:7b-instruct-q4_0',
+        fallbackPlannerModel: (p.variables || {}).fallbackPlannerModel || 'gemma3:1b',
+        defaultCoderModel: (p.variables || {}).defaultCoderModel || 'qwen2.5-coder:14b',
+        fallbackCoderModel: (p.variables || {}).fallbackCoderModel || 'codellama:instruct',
+        ragEnabled: (p.variables || {}).ragEnabled ?? true,
+        ragKDefault: (p.variables || {}).ragKDefault ?? 6,
+        plannerTimeoutMs: (p.variables || {}).plannerTimeoutMs ?? 480000,
+        retries: (p.variables || {}).retries ?? 0,
+        delegateIntervalMs: (p.variables || {}).delegateIntervalMs ?? 60000,
+        autoDelegateEnabled: (p.variables || {}).autoDelegateEnabled ?? true,
+        loggingLevel: (p.variables || {}).loggingLevel || 'info'
+      });
+      setPlannerModel((p.variables || {}).defaultPlannerModel || '');
+      setCoderModel((p.variables || {}).defaultCoderModel || '');
+      setRagK((p.variables || {}).ragKDefault ?? 8);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load profile';
+      setProfileError(msg);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    try {
+      setProfileLoading(true);
+      setProfileError('');
+      await axios.put(`${apiBase}/profile`, {
+        name: profileForm.name.trim(),
+        displayName: profileForm.displayName.trim(),
+        persona: profileForm.persona.trim(),
+        traits: { tone: profileForm.traitTone, risk: profileForm.traitRisk, domain: profileForm.traitDomain },
+        variables: {
+          defaultPlannerModel: profileForm.defaultPlannerModel,
+          fallbackPlannerModel: profileForm.fallbackPlannerModel,
+          defaultCoderModel: profileForm.defaultCoderModel,
+          fallbackCoderModel: profileForm.fallbackCoderModel,
+          ragEnabled: profileForm.ragEnabled,
+          ragKDefault: profileForm.ragKDefault,
+          plannerTimeoutMs: profileForm.plannerTimeoutMs,
+          retries: profileForm.retries,
+          delegateIntervalMs: profileForm.delegateIntervalMs,
+          autoDelegateEnabled: profileForm.autoDelegateEnabled,
+          loggingLevel: profileForm.loggingLevel
+        }
+      });
+      setToast({ text: 'Profile saved', type: 'success' });
+      setPlannerModel(profileForm.defaultPlannerModel);
+      setCoderModel(profileForm.defaultCoderModel);
+      setRagK(profileForm.ragKDefault);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save profile';
+      setProfileError(msg);
+      setToast({ text: msg, type: 'error' });
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const refreshData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [tasksRes, agentsRes] = await Promise.all([
+        axios.get(`${apiBase}/tasks`, { params: { includeDelegations: true } }),
+        axios.get(`${apiBase}/agents`)
+      ]);
+
+      setTasks(tasksRes.data || []);
+      let agentsList = agentsRes.data || [];
+      if (!agentsList.length) {
+        try {
+          const bootstrapRes = await axios.post(`${apiBase}/agents/bootstrap`);
+          setToast({ text: bootstrapRes.data?.message || 'Bootstrapped agents', type: 'success' });
+          const refreshed = await axios.get(`${apiBase}/agents`);
+          agentsList = refreshed.data || [];
+        } catch (bootstrapErr) {
+          console.error('Failed to bootstrap agents', bootstrapErr);
+        }
+      }
+      setAgents(agentsList);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load tasks or agents';
+      setError(msg);
+      setToast({ text: msg, type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProfile();
+    void fetchStartupWorkflows();
+    void fetchWorkflowRuns();
+  }, []);
+
+  useEffect(() => {
+    void refreshData();
+  }, []);
+
+  useEffect(() => {
+    void fetchTemplatesList();
+  }, []);
+
+  const cleanupDelegationStream = () => {
+    if (delegationStreamRef.current) {
+      delegationStreamRef.current.close();
+      delegationStreamRef.current = null;
+    }
+  };
+
+  const fetchDelegationsFallback = async (taskId: string) => {
+    try {
+      const res = await axios.get(`${apiBase}/api/delegate/${taskId}/delegations`);
+
+      const delegations = res.data || [];
+      setDelegationLogs((prev) => ({
+        ...prev,
+        [taskId]: (Array.isArray(delegations) ? delegations : []).map((d: any) => ({
+          ts: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
+          event: 'message' as DelegationEvent,
+          data: d
+        }))
+      }));
+
+      if (Array.isArray(delegations)) extractClarification(delegations, taskId);
+    } catch (err) {
+      console.error('Failed fallback fetch delegations', err);
+    }
+  };
+
+  const subscribeDelegationStream = (taskId: string) => {
+    cleanupDelegationStream();
+    try {
+      const es = new EventSource(`${apiBase}/api/delegate/${taskId}/delegations/stream`);
+
+      delegationStreamRef.current = es;
+      setDelegationRunning((prev) => ({ ...prev, [taskId]: true }));
+      setDelegationCancels((prev) => ({ ...prev, [taskId]: () => es.close() }));
+
+      es.addEventListener('delegations', (evt) => {
+        try {
+          const parsed = JSON.parse((evt as MessageEvent).data || '[]');
+          setDelegationLogs((prev) => ({
+            ...prev,
+            [taskId]: (Array.isArray(parsed) ? parsed : []).map((d: any) => ({
+              ts: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
+              event: 'message' as DelegationEvent,
+              data: d
+            }))
+          }));
+
+          if (Array.isArray(parsed)) extractClarification(parsed, taskId);
+        } catch (err) {
+          console.error('Failed to parse delegation stream payload', err);
+        }
+      });
+
+      es.addEventListener('error', () => {
+        setDelegationRunning((prev) => ({ ...prev, [taskId]: false }));
+        cleanupDelegationStream();
+        void fetchDelegationsFallback(taskId);
+      });
+    } catch (err) {
+      console.error('Failed to open delegation stream', err);
+      void fetchDelegationsFallback(taskId);
+    }
+  };
+
+  const streamKey = streamingTaskId ?? '';
+  const streamEntries = streamingTaskId ? delegationLogs[streamKey] ?? [] : [];
+
+  const navItems: { label: string; target: ZoneName; widget?: string }[] = [
+    { label: 'Dashboard', target: 'header' },
+    { label: 'Tasks', target: 'main', widget: 'tasks' },
+    { label: 'Suggestions', target: 'main', widget: 'suggestions' },
+    { label: 'Agents', target: 'main', widget: 'agents' },
+    { label: 'Templates', target: 'main', widget: 'templates' },
+    { label: 'Chat', target: 'footer', widget: 'chat' },
+    { label: 'Plan/Codegen', target: 'footer', widget: 'result' },
+    { label: 'Settings', target: 'footer', widget: 'settings' }
+  ];
+
+  useEffect(() => {
+    if (streamingTaskId) {
+      subscribeDelegationStream(streamingTaskId);
+    }
+    return () => cleanupDelegationStream();
+  }, [streamingTaskId]);
+
+  const extractClarification = (delegations: any[], taskId: string) => {
+    const clarifying = delegations.find(
+      (d: any) => d?.result?.status === 'needs_clarification' && Array.isArray(d?.result?.questions) && d.result.questions.length > 0
+    );
+    if (clarifying) {
+      const qs = clarifying.result.questions as string[];
+      setClarifyModal((prev) => (prev?.taskId === taskId ? prev : { taskId, questions: qs, answers: qs.map(() => '') }));
+    }
+  };
+
+  const handleClarifyAnswerChange = (idx: number, value: string) => {
+    if (!clarifyModal) return;
+    setClarifyModal({ ...clarifyModal, answers: clarifyModal.answers.map((a, i) => (i === idx ? value : a)) });
+  };
+
+  const submitClarifications = async () => {
+    if (!clarifyModal) return;
+    try {
+      await axios.post(`${apiBase}/api/delegate/${clarifyModal.taskId}/clarify`, { answers: clarifyModal.answers });
+      setToast({ text: 'Clarifications submitted, resuming delegation', type: 'success' });
+      setClarifyModal(null);
+      void refreshData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to submit clarifications';
+      setToast({ text: msg, type: 'error' });
+    }
+  };
+
+  const pushResultHistory = (payload: LocalResultPayload) => {
+    setResultHistory((prev) => [{ ...payload, at: payload.at || Date.now() }, ...prev].slice(0, 50));
+  };
+
   const renderWidget = (w: string) => {
     switch (w) {
       case 'newTask':
@@ -330,7 +764,6 @@ export default function Dashboard(): JSX.Element {
             prefillText={chatPrefill}
           />
         );
-
       case 'tasks': {
         const filtered = tasks.filter((t) => {
           const statusOk = taskStatusFilter === 'all' || t.status === taskStatusFilter;
@@ -347,11 +780,9 @@ export default function Dashboard(): JSX.Element {
               setShowTaskModal(true);
             }}
             runPlan={(task) => {
-              // Plan logic here
               console.log('Run plan for task:', task.id);
             }}
             runCodegen={(task) => {
-              // Codegen logic here
               console.log('Run codegen for task:', task.id);
             }}
             onDelegate={(task, opts) => {
@@ -374,9 +805,9 @@ export default function Dashboard(): JSX.Element {
               void doDelegate();
             }}
             onViewCode={(task) => {
-              // View code logic here
               console.log('View code for task:', task.id);
             }}
+            onCancel={handleCancelTask}
             actionLoading={delegating}
           />
         );
@@ -384,7 +815,7 @@ export default function Dashboard(): JSX.Element {
       case 'agents':
         return (
           <AgentsWidget
-            filteredAgents={agents.filter((a) => 
+            filteredAgents={agents.filter((a) =>
               !agentSearch || `${a.name} ${a.displayName} ${a.description}`.toLowerCase().includes(agentSearch.toLowerCase())
             )}
             openAgentModalForEdit={(agent) => {
@@ -437,12 +868,20 @@ export default function Dashboard(): JSX.Element {
                         <div className="text-xs text-slate-400 mt-1 line-clamp-2">{tpl.description}</div>
                         <div className="text-[11px] text-slate-500 mt-1">Agents: {(tpl.agents || []).join(', ')}</div>
                       </div>
-                      <button
-                        className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white"
-                        onClick={() => setChatPrefill(`${tpl.title}\n${tpl.description}`.trim())}
-                      >
-                        Use
-                      </button>
+                      <div className="flex gap-2 items-center">
+                        <button
+                          className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white"
+                          onClick={() => setChatPrefill(`${tpl.title}\n${tpl.description}`.trim())}
+                        >
+                          Use
+                        </button>
+                        <button
+                          className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
+                          onClick={() => handleTemplateDelete(tpl.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -685,7 +1124,7 @@ export default function Dashboard(): JSX.Element {
                         ))}
                       </div>
                       <button
-                        className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+                        className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
                         onClick={() => {
                           navigator.clipboard.writeText(JSON.stringify(workflowSuggestion, null, 2)).catch(() => {});
                           setToast({ text: 'JSON copied to clipboard', type: 'success' });
@@ -696,6 +1135,17 @@ export default function Dashboard(): JSX.Element {
                     </div>
                     {workflowSuggestionValid === false && (
                       <div className="text-xs text-red-400">Validation: {workflowSuggestionError || 'invalid'}</div>
+                    )}
+                    {workflowSuggestionError && (
+                      <div className="text-xs text-red-400">{workflowSuggestionError}</div>
+                    )}
+                    {workflowSuggestionRaw && (
+                      <details className="text-xs text-slate-300">
+                        <summary className="cursor-pointer">Raw agent response</summary>
+                        <pre className="mt-1 max-h-40 overflow-auto bg-slate-950 p-2 rounded border border-slate-800 text-[11px] whitespace-pre-wrap">
+                          {workflowSuggestionRaw}
+                        </pre>
+                      </details>
                     )}
                     <div className="flex gap-2">
                       <button
@@ -714,6 +1164,45 @@ export default function Dashboard(): JSX.Element {
                           setWorkflowSuggestion(null);
                           setWorkflowSuggestionValid(null);
                           setWorkflowSuggestionError('');
+                          setWorkflowSuggestionRaw('');
+                        }}
+                      >
+                        Clear
+                      </button>
+                      <button
+                        className="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-100 text-sm disabled:opacity-50"
+                        onClick={() => suggestWorkflow(false)}
+                        disabled={workflowSuggestLoading}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {workflowSuggestionError && !workflowSuggestion && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-red-400">{workflowSuggestionError}</div>
+                    {workflowSuggestionRaw && (
+                      <details className="text-xs text-slate-300">
+                        <summary className="cursor-pointer">Raw agent response</summary>
+                        <pre className="mt-1 max-h-40 overflow-auto bg-slate-950 p-2 rounded border border-slate-800 text-[11px] whitespace-pre-wrap">
+                          {workflowSuggestionRaw}
+                        </pre>
+                      </details>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        className="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-100 text-sm disabled:opacity-50"
+                        onClick={() => suggestWorkflow(false)}
+                        disabled={workflowSuggestLoading}
+                      >
+                        Retry
+                      </button>
+                      <button
+                        className="px-3 py-1 rounded border border-slate-700 text-slate-200 text-sm hover:bg-slate-800"
+                        onClick={() => {
+                          setWorkflowSuggestionError('');
+                          setWorkflowSuggestionRaw('');
                         }}
                       >
                         Clear
@@ -721,77 +1210,6 @@ export default function Dashboard(): JSX.Element {
                     </div>
                   </div>
                 )}
-                {workflowSuggestionError && !workflowSuggestion && (
-                  <div className="text-xs text-red-400">{workflowSuggestionError}</div>
-                )}
-              </div>
-            </div>
-            <button
-              className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm"
-              onClick={() => saveProfile()}
-              disabled={profileLoading}
-            >
-              {profileLoading ? 'Saving...' : 'Save Profile'}
-            </button>
-            {profileError && <div className="text-sm text-red-400">{profileError}</div>}
-            {/* Workflow editor */}
-            <div className="sm:col-span-2 space-y-2 rounded border border-slate-800 bg-slate-900/60 p-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-100">Edit existing workflow</div>
-                  <div className="text-xs text-slate-400">Load JSON, edit, and save</div>
-                </div>
-                <div className="flex gap-2 items-center">
-                  <select
-                    className="rounded border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-sm"
-                    value={workflowEditName}
-                    onChange={(e) => {
-                      setWorkflowEditName(e.target.value);
-                      setWorkflowEditJson('');
-                      setWorkflowEditError('');
-                      if (e.target.value) void fetchWorkflowContent(e.target.value);
-                    }}
-                  >
-                    <option value="">Select workflow</option>
-                    {startupWorkflows.map((wf) => (
-                      <option key={wf.name} value={wf.name}>
-                        {wf.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-50"
-                    onClick={() => workflowEditName && fetchWorkflowContent(workflowEditName)}
-                    disabled={!workflowEditName || workflowEditLoading}
-                  >
-                    Reload
-                  </button>
-                </div>
-              </div>
-              <textarea
-                className="w-full rounded-md border border-slate-700 bg-slate-900/70 text-slate-100 px-2 py-1 text-xs min-h-[200px]"
-                value={workflowEditJson}
-                onChange={(e) => setWorkflowEditJson(e.target.value)}
-                placeholder="Workflow JSON"
-              />
-              {workflowEditError && <div className="text-xs text-red-400">{workflowEditError}</div>}
-              <div className="flex gap-2">
-                <button
-                  className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm disabled:opacity-50"
-                  onClick={saveWorkflowContent}
-                  disabled={workflowEditLoading || !workflowEditName}
-                >
-                  {workflowEditLoading ? 'Saving…' : 'Save Workflow'}
-                </button>
-                <button
-                  className="px-3 py-1 rounded border border-slate-700 text-slate-200 text-sm hover:bg-slate-800"
-                  onClick={() => {
-                    setWorkflowEditJson('');
-                    setWorkflowEditError('');
-                  }}
-                >
-                  Clear
-                </button>
               </div>
             </div>
           </div>
@@ -888,594 +1306,192 @@ export default function Dashboard(): JSX.Element {
     ].filter(Boolean))
   );
 
-  const handleTaskSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError('');
-    try {
-      await axios.post(`${apiBase}/tasks`, {
-        title: taskForm.title.trim(),
-        description: taskForm.description.trim(),
-        priority: taskForm.priority
-      });
-      setToast({ text: 'Task saved', type: 'success' });
-      setShowTaskModal(false);
-      setEditingTaskId(null);
-      setTaskForm({ title: '', description: '', priority: 'medium' });
-      // reload tasks
-      const res = await axios.get(`${apiBase}/tasks`);
-      setTasks(res.data || []);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save task';
-      setFormError(msg);
-      setToast({ text: msg, type: 'error' });
-    }
-  };
-
-  const handleAgentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError('');
-    try {
-      await axios.post(`${apiBase}/agents/register`, {
-        name: agentForm.name.trim(),
-        displayName: agentForm.displayName.trim(),
-        description: agentForm.description.trim(),
-        capabilities: agentForm.capabilities.split(',').map((s) => s.trim()).filter(Boolean),
-        models: agentForm.models.split(',').map((s) => s.trim()).filter(Boolean)
-      });
-      setToast({ text: 'Agent saved', type: 'success' });
-      setShowAgentModal(false);
-      setEditingAgentId(null);
-      setAgentForm({ name: '', displayName: '', description: '', capabilities: 'task-management,agent-delegation', models: 'master-coordinator', preferredModel: '' });
-      const res = await axios.get(`${apiBase}/agents`);
-      setAgents(res.data || []);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save agent';
-      setFormError(msg);
-      setToast({ text: msg, type: 'error' });
-    }
-  };
-
-  const [taskForm, setTaskForm] = useState({
-    title: '',
-    description: '',
-    priority: 'medium'
-  });
-
-  const fetchTemplatesList = async () => {
-    try {
-      const list = await fetchTemplates();
-      setTemplates(list);
-    } catch (err) {
-      console.error('Failed to fetch templates', err);
-    }
-  };
-
-  const fetchStartupWorkflows = async () => {
-    try {
-      setStartupWorkflowsLoading(true);
-      const res = await axios.get(`${apiBase}/workflows/files`);
-      setStartupWorkflows((res.data?.workflows as StartupWorkflow[]) || []);
-    } catch (err) {
-      console.error('Failed to load startup workflows', err);
-    } finally {
-      setStartupWorkflowsLoading(false);
-    }
-  };
-
-  const fetchWorkflowRuns = async () => {
-    try {
-      setWorkflowRunsLoading(true);
-      const res = await axios.get(`${apiBase}/workflows/runs`);
-      setWorkflowRuns((res.data?.runs as WorkflowRun[]) || []);
-    } catch (err) {
-      console.error('Failed to load workflow runs', err);
-    } finally {
-      setWorkflowRunsLoading(false);
-    }
-  };
-
-  const fetchWorkflowContent = async (name: string) => {
-    if (!name) return;
-    try {
-      setWorkflowEditLoading(true);
-      setWorkflowEditError('');
-      const res = await axios.get(`${apiBase}/workflows/files/${name}`);
-      setWorkflowEditJson(JSON.stringify(res.data?.workflow ?? {}, null, 2));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to load workflow';
-      setWorkflowEditError(msg);
-      setWorkflowEditJson('');
-    } finally {
-      setWorkflowEditLoading(false);
-    }
-  };
-
-  const saveWorkflowContent = async () => {
-    if (!workflowEditName || !workflowEditJson.trim()) {
-      setWorkflowEditError('Select a workflow and provide JSON.');
-      return;
-    }
-    let parsed: any;
-    try {
-      parsed = JSON.parse(workflowEditJson);
-    } catch (err) {
-      setWorkflowEditError('Invalid JSON.');
-      return;
-    }
-    try {
-      setWorkflowEditLoading(true);
-      setWorkflowEditError('');
-      const exists = startupWorkflows.some((wf) => wf.name === parsed.name);
-      if (exists && parsed.name !== workflowEditName) {
-        setWorkflowEditError('Name conflicts with another workflow. Rename and try again.');
-        setWorkflowEditLoading(false);
-        return;
-      }
-      if (exists && !window.confirm('Overwrite existing workflow file?')) {
-        setWorkflowEditLoading(false);
-        return;
-      }
-      await axios.put(`${apiBase}/workflows/files/${workflowEditName}`, parsed);
-      setToast({ text: 'Workflow saved', type: 'success' });
-      await fetchStartupWorkflows();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save workflow';
-      setWorkflowEditError(msg);
-    } finally {
-      setWorkflowEditLoading(false);
-    }
-  };
-
-  const toggleWorkflowAuto = async (name: string, auto: boolean) => {
-    try {
-      await axios.post(`${apiBase}/workflows/files/${name}/auto`, { auto });
-      await fetchStartupWorkflows();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to update workflow auto flag';
-      setToast({ text: msg, type: 'error' });
-    }
-  };
-
-  const suggestWorkflow = async (approve = false) => {
-    try {
-      setWorkflowSuggestLoading(true);
-      setWorkflowSuggestionError('');
-      const res = await axios.post(`${apiBase}/workflows/suggest`, {
-        topic: workflowSuggestTopic,
-        agent: workflowSuggestAgent,
-        approve,
-        workflow: approve ? workflowSuggestion : undefined
-      });
-      setWorkflowSuggestion(res.data?.proposal || null);
-      setWorkflowSuggestionValid(Boolean(res.data?.valid));
-      if (res.data?.validationError) setWorkflowSuggestionError(res.data.validationError);
-      if (res.data?.saved) {
-        setToast({ text: 'Workflow saved', type: 'success' });
-        await fetchStartupWorkflows();
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to suggest workflow';
-      setWorkflowSuggestionError(msg);
-      setToast({ text: msg, type: 'error' });
-    } finally {
-      setWorkflowSuggestLoading(false);
-    }
-  };
-
-  const loadProfile = async () => {
-    try {
-      setProfileLoading(true);
-      setProfileError('');
-      const res = await axios.get(`${apiBase}/profile`);
-      const p: MasterProfile = res.data;
-      setProfileForm({
-        name: p.name || 'master-agent',
-        displayName: p.displayName || 'Master Agent',
-        persona: p.persona || '',
-        traitTone: (p.traits || {}).tone || 'concise',
-        traitRisk: (p.traits || {}).risk || 'cautious',
-        traitDomain: (p.traits || {}).domain || 'general',
-        defaultPlannerModel: (p.variables || {}).defaultPlannerModel || 'codellama:7b-instruct-q4_0',
-        fallbackPlannerModel: (p.variables || {}).fallbackPlannerModel || 'gemma3:1b',
-        defaultCoderModel: (p.variables || {}).defaultCoderModel || 'qwen2.5-coder:14b',
-        fallbackCoderModel: (p.variables || {}).fallbackCoderModel || 'codellama:instruct',
-        ragEnabled: (p.variables || {}).ragEnabled ?? true,
-        ragKDefault: (p.variables || {}).ragKDefault ?? 6,
-        plannerTimeoutMs: (p.variables || {}).plannerTimeoutMs ?? 480000,
-        retries: (p.variables || {}).retries ?? 0,
-        delegateIntervalMs: (p.variables || {}).delegateIntervalMs ?? 60000,
-        autoDelegateEnabled: (p.variables || {}).autoDelegateEnabled ?? true,
-        loggingLevel: (p.variables || {}).loggingLevel || 'info'
-      });
-      // hydrate UI defaults
-      setPlannerModel((p.variables || {}).defaultPlannerModel || '');
-      setCoderModel((p.variables || {}).defaultCoderModel || '');
-      setRagK((p.variables || {}).ragKDefault ?? 8);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to load profile';
-      setProfileError(msg);
-    } finally {
-      setProfileLoading(false);
-    }
-  };
-
-  const saveProfile = async () => {
-    try {
-      setProfileLoading(true);
-      setProfileError('');
-      await axios.put(`${apiBase}/profile`, {
-        name: profileForm.name.trim(),
-        displayName: profileForm.displayName.trim(),
-        persona: profileForm.persona.trim(),
-        traits: { tone: profileForm.traitTone, risk: profileForm.traitRisk, domain: profileForm.traitDomain },
-        variables: {
-          defaultPlannerModel: profileForm.defaultPlannerModel,
-          fallbackPlannerModel: profileForm.fallbackPlannerModel,
-          defaultCoderModel: profileForm.defaultCoderModel,
-          fallbackCoderModel: profileForm.fallbackCoderModel,
-          ragEnabled: profileForm.ragEnabled,
-          ragKDefault: profileForm.ragKDefault,
-          plannerTimeoutMs: profileForm.plannerTimeoutMs,
-          retries: profileForm.retries,
-          delegateIntervalMs: profileForm.delegateIntervalMs,
-          autoDelegateEnabled: profileForm.autoDelegateEnabled,
-          loggingLevel: profileForm.loggingLevel
-        }
-      });
-      setToast({ text: 'Profile saved', type: 'success' });
-      setPlannerModel(profileForm.defaultPlannerModel);
-      setCoderModel(profileForm.defaultCoderModel);
-      setRagK(profileForm.ragKDefault);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save profile';
-      setProfileError(msg);
-      setToast({ text: msg, type: 'error' });
-    } finally {
-      setProfileLoading(false);
-    }
-  };
-
-  const refreshData = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const [tasksRes, agentsRes] = await Promise.all([
-        axios.get(`${apiBase}/tasks`, { params: { includeDelegations: true } }),
-        axios.get(`${apiBase}/agents`)
-      ]);
-
-      setTasks(tasksRes.data || []);
-      let agentsList = agentsRes.data || [];
-      // Auto-bootstrap default agents if none exist
-      if (!agentsList.length) {
-        try {
-          const bootstrapRes = await axios.post(`${apiBase}/agents/bootstrap`);
-          setToast({ text: bootstrapRes.data?.message || 'Bootstrapped agents', type: 'success' });
-          const refreshed = await axios.get(`${apiBase}/agents`);
-          agentsList = refreshed.data || [];
-        } catch (bootstrapErr) {
-          console.error('Failed to bootstrap agents', bootstrapErr);
-        }
-      }
-      setAgents(agentsList);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to load tasks or agents';
-      setError(msg);
-      setToast({ text: msg, type: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadProfile();
-    void fetchStartupWorkflows();
-    void fetchWorkflowRuns();
-  }, []);
-
-  useEffect(() => {
-    void refreshData();
-  }, []);
-
-  useEffect(() => {
-    void fetchTemplatesList();
-  }, []);
-
-  const cleanupDelegationStream = () => {
-    if (delegationStreamRef.current) {
-      delegationStreamRef.current.close();
-      delegationStreamRef.current = null;
-    }
-  };
-
-  const fetchDelegationsFallback = async (taskId: string) => {
-    try {
-      const res = await axios.get(`${apiBase}/api/delegate/${taskId}/delegations`);
-
-      const delegations = res.data || [];
-      setDelegationLogs((prev) => ({
-        ...prev,
-        [taskId]: (Array.isArray(delegations) ? delegations : []).map((d: any) => ({
-          ts: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
-          event: 'message' as DelegationEvent,
-          data: d
-        }))
-      }));
-
-      if (Array.isArray(delegations)) extractClarification(delegations, taskId);
-    } catch (err) {
-      console.error('Failed fallback fetch delegations', err);
-    }
-  };
-
-  const subscribeDelegationStream = (taskId: string) => {
-    cleanupDelegationStream();
-    try {
-      const es = new EventSource(`${apiBase}/api/delegate/${taskId}/delegations/stream`);
-
-      delegationStreamRef.current = es;
-      setDelegationRunning((prev) => ({ ...prev, [taskId]: true }));
-      setDelegationCancels((prev) => ({ ...prev, [taskId]: () => es.close() }));
-
-      es.addEventListener('delegations', (evt) => {
-        try {
-          const parsed = JSON.parse((evt as MessageEvent).data || '[]');
-          setDelegationLogs((prev) => ({
-            ...prev,
-            [taskId]: (Array.isArray(parsed) ? parsed : []).map((d: any) => ({
-              ts: d.updatedAt ? new Date(d.updatedAt).getTime() : Date.now(),
-              event: 'message' as DelegationEvent,
-              data: d
-            }))
-          }));
-
-          if (Array.isArray(parsed)) extractClarification(parsed, taskId);
-        } catch (err) {
-          console.error('Failed to parse delegation stream payload', err);
-        }
-      });
-
-      es.addEventListener('error', () => {
-        setDelegationRunning((prev) => ({ ...prev, [taskId]: false }));
-        cleanupDelegationStream();
-        void fetchDelegationsFallback(taskId);
-      });
-    } catch (err) {
-      console.error('Failed to open delegation stream', err);
-      void fetchDelegationsFallback(taskId);
-    }
-  };
-
-  const streamKey = streamingTaskId ?? '';
-  const streamEntries = streamingTaskId ? delegationLogs[streamKey] ?? [] : [];
-
-  const navItems: { label: string; target: ZoneName; widget?: string }[] = [
-    { label: 'Dashboard', target: 'header' },
-    { label: 'Tasks', target: 'main', widget: 'tasks' },
-    { label: 'Suggestions', target: 'main', widget: 'suggestions' },
-    { label: 'Agents', target: 'main', widget: 'agents' },
-    { label: 'Templates', target: 'main', widget: 'templates' },
-    { label: 'Chat', target: 'footer', widget: 'chat' },
-    { label: 'Plan/Codegen', target: 'footer', widget: 'result' },
-    { label: 'Settings', target: 'footer', widget: 'settings' }
-  ];
-
-  useEffect(() => {
-    if (streamingTaskId) {
-      subscribeDelegationStream(streamingTaskId);
-    }
-    return () => cleanupDelegationStream();
-  }, [streamingTaskId]);
-
-  const extractClarification = (delegations: any[], taskId: string) => {
-    const clarifying = delegations.find(
-      (d: any) => d?.result?.status === 'needs_clarification' && Array.isArray(d?.result?.questions) && d.result.questions.length > 0
-    );
-    if (clarifying) {
-      const qs = clarifying.result.questions as string[];
-      setClarifyModal((prev) => (prev?.taskId === taskId ? prev : { taskId, questions: qs, answers: qs.map(() => '') }));
-    }
-  };
-
-  const handleClarifyAnswerChange = (idx: number, value: string) => {
-    if (!clarifyModal) return;
-    setClarifyModal({ ...clarifyModal, answers: clarifyModal.answers.map((a, i) => (i === idx ? value : a)) });
-  };
-
-  const submitClarifications = async () => {
-    if (!clarifyModal) return;
-    try {
-      await axios.post(`${apiBase}/api/delegate/${clarifyModal.taskId}/clarify`, { answers: clarifyModal.answers });
-      setToast({ text: 'Clarifications submitted, resuming delegation', type: 'success' });
-      setClarifyModal(null);
-      void refreshData();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to submit clarifications';
-      setToast({ text: msg, type: 'error' });
-    }
-  };
-
   return (
     <>
       <div className="min-h-screen bg-slate-950 text-slate-100 flex">
-
-      {/* Sidebar Navigation */}
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
-        <div className="px-4 py-3 border-b border-slate-800">
-          <div className="text-lg font-semibold text-white">Master Agent</div>
-          <div className="text-xs text-slate-400">Coordinator dashboard</div>
-        </div>
-        <nav className="flex-1 px-3 py-4 space-y-2">
-          {navItems.map((item) => (
-            <button
-              key={item.label}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors border border-transparent ${
-                activeZone === item.target
-                  ? 'bg-blue-600 text-white border-blue-500'
-                  : 'text-slate-200 hover:bg-slate-800 hover:text-white border-slate-800'
-              }`}
-              onClick={() => setActiveZone(item.target)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-400">
-          Uptime: {Math.floor(uptimeMs / 1000)}s
-        </div>
-      </aside>
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col">
-        <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur">
-          <div className="px-6 py-3 flex flex-wrap items-center gap-3">
-            <div className="flex-1 min-w-[200px]">
-              <h1 className="text-xl font-semibold text-white">Dashboard</h1>
-              <p className="text-xs text-slate-400">Manage tasks, agents, and delegation</p>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              {widgetZones.header.map((widget) => (
-                <div key={widget} className="inline-flex items-center">
-                  {renderWidget(widget)}
-                </div>
-              ))}
-            </div>
+        {/* Sidebar Navigation */}
+        <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
+          <div className="px-4 py-3 border-b border-slate-800">
+            <div className="text-lg font-semibold text-white">Master Agent</div>
+            <div className="text-xs text-slate-400">Coordinator dashboard</div>
           </div>
-        </header>
-
-        <DashboardLayout
-          widgetZones={widgetZones}
-          setWidgetZones={setWidgetZones}
-          renderWidget={renderWidget}
-          widgetLabels={{
-            newTask: 'New Task',
-            registerAgent: 'Register Agent',
-            tasks: 'Tasks',
-            agents: 'Agents',
-            templates: 'Templates',
-            suggestions: 'Suggestions',
-            chat: 'Chat',
-            result: 'Plan/Codegen',
-            delegation: 'Delegation',
-            settings: 'Settings'
-          }}
-          collapsedWidgets={collapsedWidgets}
-          expandedWidget={expandedWidget}
-          onToggleCollapse={toggleCollapse}
-          onToggleExpand={toggleExpand}
-        />
-
-        <footer className="border-t border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-3">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <div>Master Agent Dashboard v1.0</div>
-            <div> 2024 - Autonomous Coordination System</div>
-          </div>
-        </footer>
-      </div>
-    </div>
-
-    {/* Delegation Stream Modal */}
-    {streamingTaskId !== null && (
-      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-        <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-            <div>
-              <h2 className="text-lg font-semibold text-white">Live Delegation Stream</h2>
-              <p className="text-xs text-slate-400">{streamingTaskTitle}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              {streamingTaskId !== null && delegationRunning?.[streamKey] && (
-
-                <span className="text-[11px] px-2 py-1 rounded-full bg-green-900/50 text-green-200 border border-green-700">Streaming</span>
-              )}
+          <nav className="flex-1 px-3 py-4 space-y-2">
+            {navItems.map((item) => (
               <button
-                className="text-slate-300 hover:text-white text-xl leading-none px-2"
-                onClick={() => {
-                  cleanupDelegationStream();
-                  setStreamingTaskId(null);
-                  setStreamingTaskTitle('');
-                }}
+                key={item.label}
+                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors border border-transparent ${
+                  activeZone === item.target
+                    ? 'bg-blue-600 text-white border-blue-500'
+                    : 'text-slate-200 hover:bg-slate-800 hover:text-white border-slate-800'
+                }`}
+                onClick={() => setActiveZone(item.target)}
               >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-400">
+            Uptime: {Math.floor(uptimeMs / 1000)}s
+          </div>
+        </aside>
+
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col">
+          <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur">
+            <div className="px-6 py-3 flex flex-wrap items-center gap-3">
+              <div className="flex-1 min-w-[200px]">
+                <h1 className="text-xl font-semibold text-white">Dashboard</h1>
+                <p className="text-xs text-slate-400">Manage tasks, agents, and delegation</p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {widgetZones.header.map((widget) => (
+                  <div key={widget} className="inline-flex items-center">
+                    {renderWidget(widget)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </header>
+
+          <DashboardLayout
+            widgetZones={widgetZones}
+            setWidgetZones={setWidgetZones}
+            renderWidget={renderWidget}
+            widgetLabels={{
+              newTask: 'New Task',
+              registerAgent: 'Register Agent',
+              tasks: 'Tasks',
+              agents: 'Agents',
+              templates: 'Templates',
+              suggestions: 'Suggestions',
+              chat: 'Chat',
+              result: 'Plan/Codegen',
+              delegation: 'Delegation',
+              settings: 'Settings'
+            }}
+            collapsedWidgets={collapsedWidgets}
+            expandedWidget={expandedWidget}
+            onToggleCollapse={toggleCollapse}
+            onToggleExpand={toggleExpand}
+          />
+
+          <footer className="border-t border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-3">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <div>Master Agent Dashboard v1.0</div>
+              <div> 2024 - Autonomous Coordination System</div>
+            </div>
+          </footer>
+        </div>
+      </div>
+
+      {/* Delegation Stream Modal */}
+      {streamingTaskId !== null && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Live Delegation Stream</h2>
+                <p className="text-xs text-slate-400">{streamingTaskTitle}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {streamingTaskId !== null && delegationRunning?.[streamKey] && (
+
+                  <span className="text-[11px] px-2 py-1 rounded-full bg-green-900/50 text-green-200 border border-green-700">Streaming</span>
+                )}
+                <button
+                  className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white border border-red-600"
+                  onClick={handleCancelStreamingTask}
+                >
+                  Cancel Task
+                </button>
+                <button
+                  className="text-slate-300 hover:text-white text-xl leading-none px-2"
+                  onClick={() => {
+                    cleanupDelegationStream();
+                    setStreamingTaskId(null);
+                    setStreamingTaskTitle('');
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 space-y-3">
+              <DelegationTimeline entries={streamEntries} title="Iteration Timeline" running={Boolean(delegationRunning?.[streamKey])} />
+              <div className="h-px bg-slate-800" />
+              {streamEntries.length === 0 ? (
+                <div className="text-slate-400 text-sm">No delegation events yet.</div>
+              ) : (
+                streamEntries
+                  .slice()
+                  .sort((a, b) => a.ts - b.ts)
+                  .map((entry, idx) => (
+                    <div
+                      key={`${entry.ts}-${idx}`}
+                      className="flex items-start gap-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm"
+                    >
+                      <span className="text-slate-300 font-semibold min-w-[80px]">{entry.event}</span>
+                      <span className="text-slate-200 whitespace-pre-wrap break-words flex-1">
+                        {typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data, null, 2)}
+                      </span>
+                      <span className="text-[11px] text-slate-500 min-w-[90px] text-right">
+                        {new Date(entry.ts).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Result Modal */}
+      {resultModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">{resultModal?.title}</h2>
+              <button className="text-gray-500 hover:text-gray-700" onClick={() => setResultModal(null)}>
+                ✕
+              </button>
+            </div>
+            {resultModal?.meta && (
+              <div className="text-xs text-gray-600 mb-3 space-y-1">
+                <div>Model: {resultModal.meta?.model || 'n/a'}</div>
+                {resultModal.meta?.fallback && <div>Fallback: {resultModal.meta.fallback}</div>}
+                {resultModal.meta?.status && <div>Status: {resultModal.meta.status}</div>}
+                {resultModal.meta?.error && <div className="text-red-600">Error: {resultModal.meta.error}</div>}
+              </div>
+            )}
+            <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-96 overflow-auto text-sm text-gray-900 whitespace-pre-wrap">
+              {resultModal?.body}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700" onClick={() => setResultModal(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-4 right-4 z-50">
+
+          <div
+            className={`rounded-md px-4 py-3 shadow-lg text-white max-w-sm break-words ${toast?.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`}
+          >
+            <div className="flex items-start gap-3">
+              <span className="flex-1">{toast?.text}</span>
+              <button className="text-white/80 hover:text-white" onClick={() => setToast(null)} aria-label="Close toast">
                 ✕
               </button>
             </div>
           </div>
-          <div className="flex-1 overflow-auto p-4 space-y-3">
-            <DelegationTimeline entries={streamEntries} title="Iteration Timeline" running={Boolean(delegationRunning?.[streamKey])} />
-            <div className="h-px bg-slate-800" />
-            {streamEntries.length === 0 ? (
-              <div className="text-slate-400 text-sm">No delegation events yet.</div>
-            ) : (
-              streamEntries
-                .slice()
-                .sort((a, b) => a.ts - b.ts)
-                .map((entry, idx) => (
-                  <div
-                    key={`${entry.ts}-${idx}`}
-                    className="flex items-start gap-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm"
-                  >
-                    <span className="text-slate-300 font-semibold min-w-[80px]">{entry.event}</span>
-                    <span className="text-slate-200 whitespace-pre-wrap break-words flex-1">
-                      {typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data, null, 2)}
-                    </span>
-                    <span className="text-[11px] text-slate-500 min-w-[90px] text-right">
-                      {new Date(entry.ts).toLocaleTimeString()}
-                    </span>
-                  </div>
-                ))
-            )}
-          </div>
         </div>
-      </div>
-    )}
-
-    {/* Result Modal */}
-    {resultModal && (
-      <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold text-gray-900">{resultModal?.title}</h2>
-            <button className="text-gray-500 hover:text-gray-700" onClick={() => setResultModal(null)}>
-              ✕
-            </button>
-          </div>
-          {resultModal?.meta && (
-            <div className="text-xs text-gray-600 mb-3 space-y-1">
-              <div>Model: {resultModal.meta?.model || 'n/a'}</div>
-              {resultModal.meta?.fallback && <div>Fallback: {resultModal.meta.fallback}</div>}
-              {resultModal.meta?.status && <div>Status: {resultModal.meta.status}</div>}
-              {resultModal.meta?.error && <div className="text-red-600">Error: {resultModal.meta.error}</div>}
-            </div>
-          )}
-          <div className="rounded border border-gray-200 bg-gray-50 p-3 max-h-96 overflow-auto text-sm text-gray-900 whitespace-pre-wrap">
-            {resultModal?.body}
-          </div>
-          <div className="flex justify-end mt-4">
-            <button className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700" onClick={() => setResultModal(null)}>
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* Toast */}
-    {toast && (
-      <div className="fixed top-4 right-4 z-50">
-
-        <div
-          className={`rounded-md px-4 py-3 shadow-lg text-white max-w-sm break-words ${toast?.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`}
-        >
-          <div className="flex items-start gap-3">
-            <span className="flex-1">{toast?.text}</span>
-            <button className="text-white/80 hover:text-white" onClick={() => setToast(null)} aria-label="Close toast">
-              ✕
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
+      )}
     </>
   );
 }

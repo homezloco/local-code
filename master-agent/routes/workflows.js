@@ -1,6 +1,7 @@
 const express = require('express');
 const Template = require('../models/Template');
 const WorkflowRun = require('../models/WorkflowRun');
+const Task = require('../models/Task');
 const { listWorkflowFiles, updateWorkflowAuto, saveWorkflowFile, validateWorkflow, readWorkflowFile } = require('../services/startupWorkflows');
 const { delegateTask } = require('../services/DelegationEngine');
 
@@ -154,26 +155,74 @@ router.post('/suggest', async (req, res) => {
       return res.json({ proposal: providedWorkflow, valid: true, saved: true });
     }
 
-    const effectivePrompt = prompt || `Propose a startup workflow in JSON with fields: name, description, agent, auto (bool), priority (low|medium|high|urgent), schedule ('startup'), steps (array of {title, description}). Topic: ${topic}. Keep steps <=4, concise titles. Respond with JSON only.`;
-    const fakeTaskId = `workflow-suggest-${Date.now()}`;
-    const result = await delegateTask(fakeTaskId, { agentName: agent, autonomous: true, overridePrompt: effectivePrompt });
+    const effectivePrompt =
+      prompt ||
+      `You are a workflow generator. Respond with VALID JSON ONLY. No markdown, no preamble.
+Schema:
+{
+  "name": "string",              // short unique workflow name
+  "description": "string",
+  "agent": "string",             // existing agent name (e.g., master-agent)
+  "auto": boolean,
+  "priority": "low" | "medium" | "high" | "urgent",
+  "schedule": "startup",
+  "steps": [ { "title": "string", "description": "string" } ]
+}
+If you cannot produce a valid workflow, return { "error": "reason" }.
+Topic: ${topic}
+Respond with JSON ONLY.`;
+
+    // Create a real task and keep it for end-to-end traceability
+    const tempTask = await Task.create({
+      title: `Workflow suggestion: ${topic}`,
+      description: effectivePrompt,
+      status: 'pending',
+      priority: 'medium',
+      metadata: { ...(req.body?.metadata || {}), workflowSuggestion: true, topic }
+    });
+
+    const result = await delegateTask(tempTask.id, { agentName: agent, autonomous: true, overridePrompt: effectivePrompt });
+
     const text = typeof result === 'string' ? result : JSON.stringify(result);
-    let parsed = null;
-    try {
-      parsed = typeof result === 'object' && result?.result ? result.result : JSON.parse(text);
-    } catch {
-      // fall back to raw
-    }
-    const workflow = parsed && parsed.name ? parsed : null;
-    const validationError = workflow ? validateWorkflow(workflow) : 'invalid JSON result';
-    const response = { proposal: workflow || result, valid: !validationError, validationError };
+
+    const extractJson = (payload) => {
+      if (typeof payload === 'object' && payload !== null) return payload.result || payload;
+      try {
+        return JSON.parse(payload);
+      } catch (_err) {
+        const m = String(payload).match(/```json\s*([\s\S]*?)\s*```/i) || String(payload).match(/{[\s\S]*}/);
+        if (m) {
+          try {
+            return JSON.parse(m[1] || m[0]);
+          } catch (_err2) {
+            return null;
+          }
+        }
+        return null;
+      }
+    };
+
+    const parsed = extractJson(text);
+    const workflowCandidate = parsed?.proposal || parsed?.workflow || parsed;
+    const validationError = workflowCandidate ? validateWorkflow(workflowCandidate) : 'invalid JSON result';
+    const workflow = !validationError ? workflowCandidate : null;
+    const response = {
+      status: validationError ? 'error' : 'success',
+      data: workflow || workflowCandidate || null,
+      error: validationError || null,
+      message: validationError ? 'Workflow validation failed' : 'Workflow proposed',
+      rawResponse: text.slice(0, 2000)
+    };
+
     if (approve && workflow && !validationError) {
       await saveWorkflowFile(workflow);
       response.saved = true;
+      response.message = 'Workflow saved';
     }
+
     res.json(response);
   } catch (err) {
-    res.status(500).json({ error: err?.message || 'Failed to suggest workflow' });
+    res.status(500).json({ status: 'error', data: null, error: err?.message || 'Failed to suggest workflow', message: 'Failed to suggest workflow' });
   }
 });
 

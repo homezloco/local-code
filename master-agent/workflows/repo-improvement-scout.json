@@ -1,0 +1,38 @@
+{
+  "name": "repo-improvement-scout",
+  "description": "Scan D:/WindsurfProjects/localcode to propose app, master-agent, UX/UI, and workflow improvements.",
+  "agent": "master-agent",
+  "auto": true,
+  "priority": "medium",
+  "schedule": "startup",
+  "steps": [
+    {
+      "title": "Repository context sweep",
+      "description": "Enumerate key packages and services under D:/WindsurfProjects/localcode (master-agent, agent-service, shared-rag, client). Summarize purpose, tech stack, and running ports. Note missing deps or setup friction.",
+      "priority": "medium",
+      "metadata": {
+        "path": "D:/WindsurfProjects/localcode"
+      }
+    },
+    {
+      "title": "User experience quick audit",
+      "description": "Review client dashboard flows (tasks, delegation stream, workflow suggestions). Identify UX/UI pain points, confusing states, and missing affordances; propose concrete improvements with rationale.",
+      "priority": "medium"
+    },
+    {
+      "title": "Master agent workflow gaps",
+      "description": "Inspect master-agent delegation lifecycle (delegate/cancel/review loops) and startup workflows. Suggest improvements for robustness, clarity, and observability (logging, retries, status surface).",
+      "priority": "medium"
+    },
+    {
+      "title": "Performance and reliability scan",
+      "description": "Look for obvious performance or stability issues (unbounded streams, missing timeouts, error handling). Recommend targeted fixes.",
+      "priority": "medium"
+    },
+    {
+      "title": "Actionable recommendations",
+      "description": "Produce a prioritized list of improvement suggestions (app features, master-agent loop, UX/UI, dev ergonomics). For each: short title, area, impact, effort, and suggested next step.",
+      "priority": "high"
+    }
+  ]
+}
