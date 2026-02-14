@@ -74,7 +74,7 @@ const ResultModal: React.FC<ResultModalProps> = ({ resultModal, onClose, onRetry
               )}
 
               {/* Main Body */}
-              <div className="prose prose-invert prose-sm max-w-none">
+              <div className="prose prose-invert prose-sm max-w-none text-slate-300">
                 {renderMarkdown(resultModal.body)}
               </div>
             </>

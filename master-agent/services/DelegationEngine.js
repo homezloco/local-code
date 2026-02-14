@@ -4,6 +4,8 @@ const Agent = require('../models/Agent');
 const TaskDelegation = require('../models/TaskDelegation');
 const logger = require('../config/logger');
 const MemoryService = require('./MemoryService');
+const NotificationService = require('./NotificationService');
+
 
 
 const AGENT_SERVICE_URL = process.env.AGENT_SERVICE_URL || 'http://127.0.0.1:7788';
@@ -484,6 +486,10 @@ async function executeDelegate(delegationId, task, classification, options = {})
       }
     });
 
+    if (finalStatus === 'completed') {
+      NotificationService.notifyTaskCompleted(task, result).catch(err => logger.error(`Failed to send completion webhook: ${err.message}`));
+    }
+
     if (needsClarification) {
       events.push({ event: 'needs_clarification', data: { questions }, ts: Date.now() });
     }
@@ -575,6 +581,8 @@ async function executeDelegate(delegationId, task, classification, options = {})
         lastError: { delegationId, error: errorMsg, at: new Date().toISOString() }
       }
     });
+
+    NotificationService.notifyTaskFailed(task, errorMsg).catch(err => logger.error(`Failed to send failure webhook: ${err.message}`));
   } finally {
     // Trigger next task in queue
     processQueue().catch(err => logger.error(`Queue processing failed: ${err.message}`));
@@ -704,259 +712,10 @@ async function cancelDelegationForTask(taskId, reason = 'Cancelled by user') {
     timestamp: cancelledAt.toISOString()
   });
 
+  // Send webhook
+  NotificationService.notifyTaskCancelled(task, reason).catch(err => logger.error(`Failed to send cancellation webhook: ${err.message}`));
+
   return { taskId, cancelledAt, reason };
-}
-
-module.exports = {
-  delegateTask,
-  getDelegationHistory,
-  getActiveDelegations,
-  approveDelegation,
-  rejectDelegation,
-  cancelDelegationForTask,
-  executeTaskLoop,
-  classifyTask,
-  delegateToMultipleAgents,
-  delegateToAgentsParallel,
-  AGENT_CAPABILITIES,
-  delegationEvents // Export the emitter
-};
-
-// ... existing helper functions ...
-
-/**
- * Execute the delegated task via the agent-service.
- */
-async function executeDelegate(delegationId, task, classification, options = {}) {
-  const delegation = await TaskDelegation.findByPk(delegationId);
-  if (!delegation) return;
-
-  const events = [];
-  const iterations = [];
-
-  // Create AbortController for this execution
-  const controller = new AbortController();
-  activeExecutions.set(delegationId, controller);
-
-  try {
-    await delegation.update({ status: 'running', startedAt: new Date() });
-    await task.update({ status: 'in_progress' });
-
-    // Check if already cancelled
-    if (controller.signal.aborted) throw new Error('Cancelled before start');
-
-    events.push({ event: 'start', data: { taskId: task.id, agent: classification.agentName }, ts: Date.now() });
-
-    // Build the prompt based on agent type
-    const agentPrompt = options.overridePrompt || buildAgentPrompt(classification.agentName, task);
-
-    // Fetch relevant long-term memories
-    let memories = [];
-    try {
-      memories = await MemoryService.searchMemory(`${task.title} ${task.description}`, 3);
-    } catch (memErr) {
-      logger.warn(`Failed to fetch memories: ${memErr.message}`);
-    }
-
-    const memoryContext = memories.map(m => `[Memory] ${m.content}`).join('\n');
-    const enrichedPrompt = memoryContext ? `${agentPrompt}\n\nRelevant Memories:\n${memoryContext}` : agentPrompt;
-
-    const autonomous = options.autonomous !== undefined ? options.autonomous : true;
-
-    let data;
-
-    // Check if cancelled before fetch
-    if (controller.signal.aborted) throw new Error('Cancelled by user');
-
-    // Mock for verification (Bypass network)
-    if (task.title.includes("Test Next Tasks")) {
-      console.log("DEBUG: Using mock data (bypass fetch)");
-      data = {
-        finalAnswer: "Mock result",
-        status: "completed",
-        iterations: [],
-        events: [],
-        nextTasks: [{ title: "Child Task 1", description: "Generated child", priority: "low" }]
-      };
-    } else {
-      // Call the agent-service /execute endpoint (autonomous loop)
-      const resp = await fetch(`${AGENT_SERVICE_URL}/execute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task: enrichedPrompt,
-          context: { useRAG: true, k: 8 },
-          autonomous,
-          model: resolveAgentModel(classification.agentName, options.model) || CLASSIFIER_MODEL,
-          provider: options.provider,
-          apiKey: options.apiKey,
-          endpoint: options.endpoint
-        }),
-        signal: controller.signal
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Agent service error ${resp.status}: ${text}`);
-      }
-
-      data = await resp.json();
-    }
-
-    // Check if cancelled after fetch (race condition check)
-    // Re-fetch delegation to check current status in DB
-    const checkDelegation = await TaskDelegation.findByPk(delegationId);
-    if (checkDelegation.status === 'cancelled' || controller.signal.aborted) {
-      throw new Error('Cancelled by user');
-    }
-
-    console.log("DEBUG: data.nextTasks:", JSON.stringify(data.nextTasks));
-
-    const loopIterations = Array.isArray(data.iterations) ? data.iterations : [];
-    const loopEvents = Array.isArray(data.events) ? data.events : [];
-
-    const result = normalizeResultPayload(data);
-    const needsClarification = result.status === 'needs_clarification' || (result.questions && result.questions.length > 0);
-
-    // merge remote iterations/events with local start event
-    events.push(...loopEvents.map((e) => ({ ...e }))); // shallow copy
-    iterations.push(...loopIterations.map((it) => ({ ...it })));
-
-    const needsReview = needsClarification || classification.confidence < 0.7 || task.priority === 'urgent';
-    const finalStatus = needsClarification ? 'review' : needsReview ? 'review' : 'completed';
-
-    await delegation.update({
-      status: finalStatus,
-      result,
-      iterations,
-      events,
-      completedAt: new Date()
-    });
-
-    await task.update({
-      status: needsClarification ? 'needs_clarification' : finalStatus,
-      metadata: {
-        ...(task.metadata || {}),
-        lastDelegation: {
-          delegationId,
-          agentName: classification.agentName,
-          result: result.plan || '',
-          completedAt: new Date().toISOString(),
-          needsClarification,
-          questions: result.questions || null
-        }
-      }
-    });
-
-    if (needsClarification) {
-      events.push({ event: 'needs_clarification', data: { questions }, ts: Date.now() });
-    }
-
-    // Handle nextTasks (Agent-Driven Task Creation)
-    if (Array.isArray(data.nextTasks) && data.nextTasks.length > 0) {
-      logger.info(`Agent generated ${data.nextTasks.length} follow-up tasks`, { parentId: task.id });
-
-      for (const nextTask of data.nextTasks) {
-        if (!nextTask.title) continue;
-
-        try {
-          const newTask = await Task.create({
-            title: nextTask.title,
-            description: nextTask.description || `Follow-up to "${task.title}"`,
-            priority: nextTask.priority || 'medium',
-            status: 'pending',
-            parentId: task.id,
-            metadata: {
-              source: 'agent-generated',
-              parentDelegationId: delegation.id,
-              originalPrompt: nextTask.description
-            }
-          });
-
-          logger.info(`Created follow-up task: ${newTask.id} - ${newTask.title}`);
-        } catch (err) {
-          logger.error(`Failed to create follow-up task`, { error: err.message });
-        }
-      }
-    }
-
-    logger.info(`Delegation ${delegationId} completed with status: ${finalStatus}`);
-  } catch (err) {
-    const isCancelled = err.name === 'AbortError' || err.message === 'Cancelled by user';
-
-    // If it was cancelled, we don't want to overwrite the 'cancelled' status with 'failed'
-    // unless the DB status isn't cancelled yet?
-    // But cancelDelegationForTask sets it to cancelled.
-
-    if (isCancelled) {
-      logger.info(`Delegation ${delegationId} execution aborted/cancelled.`);
-      // Ensure DB reflects cancelled if not already (it should be)
-      await delegation.update({ status: 'cancelled', error: 'Cancelled by user', completedAt: new Date() });
-      // Don't retry cancelled tasks
-      return;
-    }
-
-    const errorMsg = err?.message || String(err);
-    logger.error(`Delegation ${delegationId} failed: ${errorMsg}`);
-
-    events.push({ event: 'error', data: { message: errorMsg }, ts: Date.now() });
-    iterations.push({ thought: 'Error during delegation', action: 'error', observation: errorMsg, ts: Date.now() });
-
-    // Auto-retry logic (only if not cancelled)
-    const MAX_RETRIES = 2;
-    const currentRetries = task.metadata?.retryCount || 0;
-
-    if (currentRetries < MAX_RETRIES && !options.noRetry) {
-      const nextRetry = currentRetries + 1;
-      const delayMs = 5000 * nextRetry; // Progressive backoff: 5s, 10s...
-
-      logger.warn(`Delegation ${delegationId} failed. Retrying (${nextRetry}/${MAX_RETRIES}) in ${delayMs}ms...`);
-
-      await task.update({
-        status: 'pending', // Reset to pending to be picked up or just re-delegate
-        metadata: {
-          ...(task.metadata || {}),
-          retryCount: nextRetry,
-          lastError: { delegationId, error: errorMsg, at: new Date().toISOString() }
-        }
-      });
-
-      // Schedule retry
-      setTimeout(() => {
-        delegateTask(task.id, { ...options, isRetry: true }).catch(e => logger.error(`Retry failed to start: ${e.message}`));
-      }, delayMs);
-
-      // Mark current delegation as failed but task continues
-      await delegation.update({
-        status: 'failed',
-        error: errorMsg + ` (Retrying ${nextRetry}/${MAX_RETRIES})`,
-        iterations,
-        events,
-        completedAt: new Date()
-      });
-
-      return;
-    }
-
-    await delegation.update({
-      status: 'failed',
-      error: errorMsg,
-      iterations,
-      events,
-      completedAt: new Date()
-    });
-
-    await task.update({
-      status: 'failed',
-      metadata: {
-        ...(task.metadata || {}),
-        lastError: { delegationId, error: errorMsg, at: new Date().toISOString() }
-      }
-    });
-  } finally {
-    // Cleanup abort controller
-    activeExecutions.delete(delegationId);
-  }
 }
 
 /**
@@ -1254,6 +1013,14 @@ async function delegateToAgentsParallel(taskId, agentNames, options = {}) {
   return { status: 'completed', results };
 }
 
+/**
+ * Main entry point for task delegation.
+ * Currently matches executeTaskLoop behavior for immediate execution.
+ */
+async function delegateTask(taskId, options = {}) {
+  return executeTaskLoop(taskId, options);
+}
+
 module.exports = {
   classifyTask,
   delegateTask,
@@ -1265,5 +1032,6 @@ module.exports = {
   cancelDelegationForTask,
   delegateToMultipleAgents,
   delegateToAgentsParallel,
-  AGENT_CAPABILITIES
+  AGENT_CAPABILITIES,
+  delegationEvents
 };

@@ -71,20 +71,31 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
   };
 
   const openFullResult = useCallback(async (task: Task, fallbackText: string) => {
+    console.log('[TasksWidget] Opening full result for:', task.title, 'Fallback:', fallbackText);
     setFullResultModal({ taskTitle: task.title, result: formatResult(fallbackText), loading: true });
     try {
       const resp = await fetch(`${API}/api/delegate/${task.id}/delegations`);
       if (resp.ok) {
         const json = await resp.json();
         const delegations = Array.isArray(json.data) ? json.data : (Array.isArray(json) ? json : []);
-        const latest = delegations?.[0];
-        if (latest?.result) {
-          setFullResultModal({ taskTitle: task.title, result: formatResult(latest.result), loading: false });
+        console.log('[TasksWidget] Fetched delegations:', delegations);
+
+        // Find the most recent delegation that typically has a result (or just the first one if we want to show strict history)
+        // Better: Find the first one with a non-empty result
+        const latestWithResult = delegations.find((d: any) => d.result);
+
+        if (latestWithResult?.result) {
+          console.log('[TasksWidget] Found latest result:', latestWithResult.result);
+          setFullResultModal({ taskTitle: task.title, result: formatResult(latestWithResult.result), loading: false });
           return;
+        } else {
+          console.log('[TasksWidget] No result found in history, using fallback.');
         }
+      } else {
+        console.error('[TasksWidget] Failed to fetch history:', resp.status);
       }
-    } catch {
-      // fallback to truncated text
+    } catch (e) {
+      console.error('[TasksWidget] Error fetching history:', e);
     }
     setFullResultModal((prev) => prev ? { ...prev, loading: false } : null);
   }, []);

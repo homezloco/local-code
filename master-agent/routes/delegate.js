@@ -11,14 +11,38 @@ const {
   classifyTask,
   delegateToMultipleAgents,
   delegateToAgentsParallel,
-  delegateToAgentsParallel,
+
   AGENT_CAPABILITIES,
   delegationEvents
 } = require('../services/DelegationEngine');
 
 const Task = require('../models/Task');
 
-// ... (existing routes)
+// Delegate a task
+router.post('/:taskId', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const options = req.body || {};
+
+    // Default autonomous to true if not specified, unless manually disabled
+    if (options.autonomous === undefined) options.autonomous = true;
+
+    const result = await delegateTask(taskId, options);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get delegation history for a task
+router.get('/:taskId/delegations', async (req, res) => {
+  try {
+    const delegations = await getDelegationHistory(req.params.taskId);
+    res.json({ data: delegations });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // SSE stream for delegation updates
 router.get('/:taskId/delegations/stream', async (req, res) => {

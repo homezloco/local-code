@@ -75,7 +75,7 @@ export const renderMarkdown = (text: string): React.ReactElement => {
     '<pre class="bg-white text-gray-900 border border-gray-300 rounded-md p-3 overflow-auto text-sm"><code>$1</code></pre>'
   );
   const withBreaks = withCode.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>');
-  return <div className="prose max-w-none text-gray-900" dangerouslySetInnerHTML={{ __html: withBreaks }} />;
+  return <div dangerouslySetInnerHTML={{ __html: withBreaks }} />;
 };
 
 export const Skeleton: React.FC<{ className?: string; rows?: number }> = ({ className = '', rows = 1 }) => (

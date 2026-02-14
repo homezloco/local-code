@@ -62,7 +62,9 @@ app.use('/tasks', tasksRouter);
 app.use('/agents', agentsRouter);
 app.use('/email', emailRouter);
 app.use('/suggestions', suggestionsRouter);
+app.use('/predictions', suggestionsRouter); // Alias if needed
 app.use('/workflows', workflowsRouter);
+app.use('/templates', require('./routes/templates'));
 app.use('/api/delegate', delegateRouter);
 app.use('/delegations', delegationsRouter);
 app.use('/profile', profileRouter);

@@ -1,0 +1,19 @@
+{
+    "ignore": [
+        "*.json",
+        "*.log",
+        "logs/*",
+        "tmp/*",
+        "verify_flow.sh",
+        "verify_flow.bat"
+    ],
+    "watch": [
+        "index.js",
+        "server.js",
+        "routes/",
+        "services/",
+        "models/",
+        "config/"
+    ],
+    "ext": "js,json"
+}
