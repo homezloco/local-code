@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import type { Task } from './types';
 import { getStatusColor, getPriorityColor, CopyButton } from './helpers';
+import ResultModal from './ResultModal';
 
 interface TasksWidgetProps {
   filteredTasks: Task[];
@@ -11,6 +12,8 @@ interface TasksWidgetProps {
   onViewCode?: (task: Task) => void;
   actionLoading?: boolean;
   onCancel?: (task: Task) => void;
+  onArchive?: (task: Task) => void;
+  onRetry?: (task: Task) => void;
 }
 
 const STATUS_ICONS: Record<string, string> = {
@@ -39,6 +42,8 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
   onViewCode,
   actionLoading,
   onCancel,
+  onArchive,
+  onRetry,
 }) => {
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
   const [autoFlags, setAutoFlags] = useState<Record<string, boolean>>({});
@@ -86,7 +91,7 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
 
   return (
     <>
-      <div className="space-y-4">
+      <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
         {filteredTasks.length === 0 && (
           <div className="border border-dashed border-slate-700 rounded-lg p-4 text-center text-slate-400 bg-slate-900/40">
             No tasks for these filters. Try clearing search/filters or adding a new task.
@@ -102,16 +107,16 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
           } | undefined;
           const lastError = task.metadata?.lastError as { error?: string; at?: string } | undefined;
           const isDelegated = status === 'delegated' || status === 'in_progress';
-          const isFinished = status === 'completed' || status === 'review' || status === 'failed';
+          const isFinished = status === 'completed' || status === 'review' || status === 'failed' || status === 'cancelled';
 
           return (
             <div
               key={task.id}
               className={`border-l-4 rounded-lg pl-4 py-3 transition-colors cursor-pointer ${status === 'completed' ? 'border-green-500 bg-green-900/10' :
-                  status === 'review' ? 'border-yellow-500 bg-yellow-900/10' :
-                    status === 'failed' ? 'border-red-500 bg-red-900/10' :
-                      isDelegated ? 'border-purple-500 bg-purple-900/10' :
-                        'border-slate-600 bg-slate-800/40'
+                status === 'review' ? 'border-yellow-500 bg-yellow-900/10' :
+                  status === 'failed' ? 'border-red-500 bg-red-900/10' :
+                    isDelegated ? 'border-purple-500 bg-purple-900/10' :
+                      'border-slate-600 bg-slate-800/40'
                 } hover:bg-slate-700/30`}
               onClick={() => openFullResult(task, formatResult(delegation?.result ?? task.description ?? ''))}
             >
@@ -297,6 +302,32 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
                         </button>
                       </>
                     )}
+                    {isFinished && onArchive && (
+                      <button
+                        type="button"
+                        className="text-slate-400 hover:text-slate-200 text-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onArchive(task);
+                        }}
+                        disabled={actionLoading}
+                      >
+                        Archive
+                      </button>
+                    )}
+                    {(status === 'failed' || status === 'cancelled') && onRetry && (
+                      <button
+                        type="button"
+                        className="text-blue-400 hover:text-blue-200 text-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRetry(task);
+                        }}
+                        disabled={actionLoading}
+                      >
+                        Retry
+                      </button>
+                    )}
                     {isFinished && delegation && task.assignedTo === 'coding-agent' && onViewCode && (
                       <button
                         type="button"
@@ -323,42 +354,15 @@ const TasksWidget: React.FC<TasksWidgetProps> = ({
       </div>
 
       {fullResultModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-slate-700">
-              <h2 className="text-lg font-semibold text-white truncate pr-4">{fullResultModal.taskTitle}</h2>
-              <div className="flex items-center gap-2 shrink-0">
-                <CopyButton text={fullResultModal.result} />
-                <button
-                  type="button"
-                  className="text-slate-400 hover:text-white text-xl leading-none px-2"
-                  onClick={() => setFullResultModal(null)}
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto p-4">
-              {fullResultModal.loading ? (
-                <div className="text-center text-slate-400 py-8">
-                  <div className="animate-spin inline-block w-6 h-6 border-2 border-slate-400 border-t-transparent rounded-full mb-2" />
-                  <p>Loading full result...</p>
-                </div>
-              ) : (
-                <pre className="text-sm text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">{fullResultModal.result}</pre>
-              )}
-            </div>
-            <div className="flex justify-end p-4 border-t border-slate-700">
-              <button
-                type="button"
-                className="px-4 py-2 rounded-md bg-slate-600 hover:bg-slate-500 text-white text-sm"
-                onClick={() => setFullResultModal(null)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <ResultModal
+          resultModal={{
+            title: fullResultModal.taskTitle,
+            body: fullResultModal.result || '',
+            meta: { error: fullResultModal.result.startsWith('Error:') ? fullResultModal.result : undefined } // Basic error detection if any
+          }}
+          loading={fullResultModal.loading}
+          onClose={() => setFullResultModal(null)}
+        />
       )}
     </>
   );

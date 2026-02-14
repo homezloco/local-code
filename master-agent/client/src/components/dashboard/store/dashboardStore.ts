@@ -93,7 +93,7 @@ export const useDashboardStore = create<DashboardState>((set: SetState) => ({
     set((state) => ({
       templateForm: typeof updater === 'function' ? updater(state.templateForm) : { ...state.templateForm, ...updater }
     })),
-  widgetZones: { header: ['newTask', 'registerAgent'], main: ['tasks', 'templates', 'suggestions'], secondary: ['agents'], footer: ['chat', 'result', 'delegation', 'settings'] },
+  widgetZones: { header: [], main: ['tasks', 'templates', 'suggestions'], secondary: ['agents'], footer: ['chat', 'result', 'delegation', 'settings'] },
   setWidgetZones: (updater: WidgetZones | ((prev: WidgetZones) => WidgetZones)) =>
     set((state) => ({
       widgetZones: typeof updater === 'function' ? updater(state.widgetZones) : updater

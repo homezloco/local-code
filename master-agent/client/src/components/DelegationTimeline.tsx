@@ -45,16 +45,21 @@ export const DelegationTimeline: React.FC<Props> = ({ entries, title = 'Delegati
       </div>
       <div className="space-y-1 text-xs">
         {sliced.map((entry, idx) => {
+          const isError = ['error', 'parse_error', 'agent_error'].includes(entry.event);
           const color = eventColor[entry.event] || 'text-slate-200';
           const label = entry.event.replace('_', ' ');
-          const content = typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data);
+          const content = typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data?.message || entry.data);
+
           return (
-            <div key={`${entry.ts}-${idx}`} className="flex items-start gap-2">
-              <span className={`font-semibold ${color}`}>{label}</span>
-              <span className="text-slate-400 whitespace-pre-wrap break-words flex-1" title={content}>
+            <div
+              key={`${entry.ts}-${idx}`}
+              className={`flex items-start gap-2 p-1 rounded ${isError ? 'bg-red-900/20 border border-red-900/50' : ''}`}
+            >
+              <span className={`font-semibold shrink-0 ${color}`}>{label}</span>
+              <span className={`whitespace-pre-wrap break-words flex-1 ${isError ? 'text-red-200' : 'text-slate-400'}`} title={content}>
                 {content}
               </span>
-              <span className="text-slate-500 min-w-[70px] text-right">
+              <span className="text-slate-500 min-w-[70px] text-right shrink-0">
                 {new Date(entry.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </div>

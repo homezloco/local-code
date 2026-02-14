@@ -3,20 +3,22 @@ import type { TaskForm } from './types';
 
 interface TaskModalProps {
   editingTaskId: string | null;
-  formError: string;
+  errors: Record<string, string>;
   taskForm: TaskForm;
   setTaskForm: React.Dispatch<React.SetStateAction<TaskForm>>;
   onSubmit: (event: React.FormEvent) => Promise<void>;
   onClose: () => void;
+  isSubmitting?: boolean;
 }
 
 const TaskModal: React.FC<TaskModalProps> = ({
   editingTaskId,
-  formError,
+  errors,
   taskForm,
   setTaskForm,
   onSubmit,
   onClose,
+  isSubmitting = false,
 }) => (
   <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
     <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
@@ -26,7 +28,7 @@ const TaskModal: React.FC<TaskModalProps> = ({
           ✕
         </button>
       </div>
-      {formError && <p className="text-red-600 mb-3 text-sm">{formError}</p>}
+      {errors.global && <p className="text-red-600 mb-3 text-sm">{errors.global}</p>}
       <form className="space-y-4" onSubmit={onSubmit}>
         <div>
           <label className="block text-sm font-medium text-gray-700">Title</label>
@@ -36,6 +38,7 @@ const TaskModal: React.FC<TaskModalProps> = ({
             onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
             required
           />
+          {errors.title && <p className="text-red-500 text-xs mt-1">{errors.title}</p>}
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700">Description</label>
@@ -69,9 +72,10 @@ const TaskModal: React.FC<TaskModalProps> = ({
           </button>
           <button
             type="submit"
-            className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+            className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            disabled={isSubmitting}
           >
-            {editingTaskId ? 'Save Changes' : 'Create Task'}
+            {isSubmitting ? 'Saving...' : (editingTaskId ? 'Save Changes' : 'Create Task')}
           </button>
         </div>
       </form>

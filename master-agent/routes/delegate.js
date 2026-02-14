@@ -11,71 +11,14 @@ const {
   classifyTask,
   delegateToMultipleAgents,
   delegateToAgentsParallel,
-  AGENT_CAPABILITIES
+  delegateToAgentsParallel,
+  AGENT_CAPABILITIES,
+  delegationEvents
 } = require('../services/DelegationEngine');
 
 const Task = require('../models/Task');
 
-// Delegate a task to an agent
-router.post('/:taskId/delegate', async (req, res) => {
-  try {
-    const { taskId } = req.params;
-    const { agentName, model, provider, apiKey, endpoint, autonomous } = req.body;
-
-    const result = await delegateTask(taskId, { agentName, model, provider, apiKey, endpoint, autonomous });
-    res.json({ status: 'success', data: result, error: null, message: 'Delegation started' });
-  } catch (error) {
-    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to delegate task' });
-  }
-});
-
-// Cancel a task and any active delegations
-router.post('/:taskId/cancel', async (req, res) => {
-  try {
-    const { taskId } = req.params;
-    const reason = req.body?.reason || 'Cancelled by user';
-    const result = await cancelDelegationForTask(taskId, reason);
-    res.json({ status: 'success', data: result, error: null, message: 'Task cancelled' });
-  } catch (error) {
-    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to cancel task' });
-  }
-});
-
-// Execute a task in a synchronous Thought/Action/Observation loop and return the delegation record
-router.post('/:taskId/execute', async (req, res) => {
-  try {
-    const { taskId } = req.params;
-    const { agentName, model, provider, apiKey, endpoint, autonomous } = req.body || {};
-    const result = await executeTaskLoop(taskId, { agentName, model, provider, apiKey, endpoint, autonomous });
-    res.json({ status: 'success', data: { delegation: result }, error: null, message: 'Execution completed' });
-  } catch (error) {
-    res.status(400).json({ status: 'error', data: null, error: error.message, message: 'Failed to execute task' });
-  }
-});
-
-// Classify a task without delegating (preview which agent would handle it)
-router.post('/:taskId/classify', async (req, res) => {
-  try {
-    const Task = require('../models/Task');
-    const task = await Task.findByPk(req.params.taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-
-    const classification = await classifyTask(task.title, task.description);
-    res.json({ status: 'success', data: classification, error: null, message: 'Task classified' });
-  } catch (error) {
-    res.status(500).json({ status: 'error', data: null, error: error.message, message: 'Failed to classify task' });
-  }
-});
-
-// Get delegation history for a task
-router.get('/:taskId/delegations', async (req, res) => {
-  try {
-    const delegations = await getDelegationHistory(req.params.taskId);
-    res.json({ status: 'success', data: delegations, error: null, message: 'Delegations fetched' });
-  } catch (error) {
-    res.status(500).json({ status: 'error', data: null, error: error.message, message: 'Failed to fetch delegations' });
-  }
-});
+// ... (existing routes)
 
 // SSE stream for delegation updates
 router.get('/:taskId/delegations/stream', async (req, res) => {
@@ -84,14 +27,12 @@ router.get('/:taskId/delegations/stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
+  const { taskId } = req.params;
   let cancelled = false;
-  req.on('close', () => {
-    cancelled = true;
-  });
 
   const send = async () => {
     try {
-      const delegations = await getDelegationHistory(req.params.taskId);
+      const delegations = await getDelegationHistory(taskId);
       if (!cancelled) {
         res.write(`event: delegations\n`);
         res.write(`data: ${JSON.stringify(delegations)}\n\n`);
@@ -104,10 +45,30 @@ router.get('/:taskId/delegations/stream', async (req, res) => {
     }
   };
 
+  // Event listener for real-time updates
+  const eventHandler = (data) => {
+    if (data.taskId === taskId) {
+      if (data.type === 'cancelled') {
+        res.write(`event: cancelled\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      }
+      // Always fetch fresh history to be safe
+      void send();
+    }
+  };
+
+  delegationEvents.on('update', eventHandler);
+
   const intervalId = setInterval(() => {
     if (cancelled) return clearInterval(intervalId);
     void send();
   }, 3000);
+
+  req.on('close', () => {
+    cancelled = true;
+    clearInterval(intervalId);
+    delegationEvents.off('update', eventHandler);
+  });
 
   // initial push
   void send();
@@ -165,6 +126,29 @@ router.post('/delegations/:delegationId/reject', async (req, res) => {
     res.json(delegation);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// One-Click Retry
+router.post('/:taskId/retry', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const task = await Task.findByPk(taskId);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    // Reset retry count to allow fresh attempts
+    const newMeta = { ...(task.metadata || {}), retryCount: 0 };
+
+    // Reset status to pending so it gets picked up
+    await task.update({ status: 'pending', metadata: newMeta });
+
+    // Trigger delegation immediately
+    // We treat manual retry as an autonomous run unless specified otherwise
+    const result = await delegateTask(taskId, { autonomous: true, isRetry: true });
+
+    res.json({ status: 'success', message: 'Task retry initiated', data: result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

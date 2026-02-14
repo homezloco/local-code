@@ -230,7 +230,7 @@ export function DashboardLayout({ widgetZones, setWidgetZones, renderWidget, wid
 
         {/* Main + Secondary */}
         <div className="flex flex-1 flex-col lg:flex-row">
-          <main className="flex-1 p-6 overflow-auto" style={{ width: `100%`, maxWidth: '100%' }}>
+          <main className="flex-1 p-6 overflow-auto" style={{ width: widgetZones.secondary.length > 0 ? `${mainWidth}%` : '100%' }}>
             {zoneRender('main')}
           </main>
 

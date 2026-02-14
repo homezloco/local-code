@@ -23,20 +23,24 @@ db.models.Memory = Memory;
 
 async function initDatabase() {
   try {
-    // Allow configurable sync strategy to avoid noisy backup/restore in dev
-    // DB_SYNC_STRATEGY: 'alter' (default), 'sync' (no alter), 'none'
-    // Switch sqlite default to 'alter' so additive columns (e.g., parentId) are applied automatically.
-    const defaultStrategy = 'alter';
+    const dialect = db.sequelize.getDialect();
+    // Default strategy: 'alter' for Postgres (safe-ish), 'sync' for SQLite (avoid loops/locks)
+    // DB_SYNC_STRATEGY env var overrides this.
+    const defaultStrategy = dialect === 'sqlite' ? 'sync' : 'alter';
 
     const strategy = (process.env.DB_SYNC_STRATEGY || defaultStrategy).toLowerCase();
+
+    console.log(`Initializing database (dialect: ${dialect}, strategy: ${strategy})...`);
 
     if (strategy === 'none') {
       console.log('Database sync skipped (DB_SYNC_STRATEGY=none)');
     } else if (strategy === 'sync') {
+      // Create tables if they don't exist, but do not alter existing ones
       await db.sequelize.sync({ force: false, alter: false });
-      console.log('Database synchronized successfully (sync)');
+      console.log('Database synchronized successfully (sync - no alter)');
     } else {
-      // default: alter to apply additive changes without destructive drops
+      // default/alter: apply additive changes
+      // Note: On SQLite, 'alter: true' can cause recreation loops for indices. Use with caution.
       await db.sequelize.sync({ force: false, alter: true });
       console.log('Database synchronized successfully (alter)');
     }

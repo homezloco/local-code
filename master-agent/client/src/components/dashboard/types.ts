@@ -2,7 +2,7 @@ export interface Task {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'delegated' | 'in_progress' | 'review' | 'completed' | 'failed';
+  status: 'pending' | 'delegated' | 'in_progress' | 'review' | 'completed' | 'failed' | 'cancelled' | 'archived';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   assignedTo?: string;
   dueDate?: string;
@@ -19,13 +19,13 @@ export interface Suggestion {
   confidence?: number | null;
   score?: number | null;
   status:
-    | 'new'
-    | 'merged'
-    | 'approved'
-    | 'rejected'
-    | 'auto_answered'
-    | 'auto_delegated'
-    | 'needs_review';
+  | 'new'
+  | 'merged'
+  | 'approved'
+  | 'rejected'
+  | 'auto_answered'
+  | 'auto_delegated'
+  | 'needs_review';
   createdAt: string;
   updatedAt: string;
   metadata?: any;
@@ -85,6 +85,7 @@ export type AgentForm = {
   description: string;
   capabilities: string;
   models: string;
+  preferredModel: string;
 };
 
 export type SecretFormFields = {

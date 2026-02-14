@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
-import { useDashboardStore } from '../../store/useDashboardStore';
+import { useDashboardStore } from './store/dashboardStore';
 import { StartupWorkflow, WorkflowRun } from './types';
 import { TemplateDto } from '../../services/templatesClient';
 
@@ -11,6 +11,8 @@ export const useDashboardData = () => {
         setTasks,
         setAgents,
         setTemplates,
+        profileForm,
+        setProfileForm
     } = useDashboardStore();
 
     const [loading, setLoading] = useState(true);
@@ -29,7 +31,19 @@ export const useDashboardData = () => {
                 axios.get(`${apiBase}/agents`)
             ]);
             setTasks(tasksRes.data || []);
-            setAgents(agentsRes.data || []);
+            let agentsList = agentsRes.data || [];
+
+            if (!agentsList.length) {
+                try {
+                    const bootstrapRes = await axios.post(`${apiBase}/agents/bootstrap`);
+                    console.log('Bootstrapped agents:', bootstrapRes.data?.message);
+                    const refreshed = await axios.get(`${apiBase}/agents`);
+                    agentsList = refreshed.data || [];
+                } catch (bootstrapErr) {
+                    console.error('Failed to bootstrap agents', bootstrapErr);
+                }
+            }
+            setAgents(agentsList);
         } catch (error) {
             console.error('Failed to fetch dashboard data', error);
         } finally {
@@ -70,6 +84,33 @@ export const useDashboardData = () => {
         }
     };
 
+    const loadProfile = async () => {
+        try {
+            setProfileLoading(true);
+            const res = await axios.get(`${apiBase}/profile`);
+            if (res.data) setProfileForm(res.data);
+        } catch (err) {
+            console.error('Failed to load profile', err);
+        } finally {
+            setProfileLoading(false);
+        }
+    };
+
+    const saveProfile = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setProfileError('');
+        try {
+            setProfileLoading(true);
+            await axios.post(`${apiBase}/profile`, profileForm);
+            setProfileError('');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to save profile';
+            setProfileError(msg);
+        } finally {
+            setProfileLoading(false);
+        }
+    };
+
     return {
         loading,
         refreshData,
@@ -83,6 +124,8 @@ export const useDashboardData = () => {
         profileLoading,
         setProfileLoading,
         profileError,
-        setProfileError
+        setProfileError,
+        loadProfile,
+        saveProfile
     };
 };
